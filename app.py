@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
 from PIL import Image, ImageDraw
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -79,13 +78,15 @@ if "labels" not in st.session_state:
     st.session_state.labels = ["Object"]
 if "loaded_image_id" not in st.session_state:
     st.session_state.loaded_image_id = None
-if "bg_image_path" not in st.session_state:
-    st.session_state.bg_image_path = None
-if "yolo_lines" not in st.session_state:
-    st.session_state.yolo_lines = None
+if "loaded_image_pil" not in st.session_state:
+    st.session_state.loaded_image_pil = None
+if "click_coords" not in st.session_state:
+    st.session_state.click_coords = [] # 클릭한 좌표 저장 리스트
+if "saved_yolo_lines" not in st.session_state:
+    st.session_state.saved_yolo_lines = []
 
 st.sidebar.title("🚀 AI 교육 플랫폼")
-menu = st.sidebar.radio("메뉴 선택", ["1. 데이터 수집 (업로드)", "2. 데이터 라벨링 (정답지)", "3. AI 모델 분석 (YOLOv8)"])
+menu = st.sidebar.radio("메뉴 선택", ["1. 데이터 수집 (업로드)", "2. 데이터 라벨링 (클릭 방식)", "3. AI 모델 분석 (YOLOv8)"])
 
 # --- 1. 데이터 수집 ---
 if menu == "1. 데이터 수집 (업로드)":
@@ -107,9 +108,10 @@ if menu == "1. 데이터 수집 (업로드)":
         else:
             st.warning("사진을 첨부해주세요.")
 
-# --- 2. 데이터 라벨링 ---
-elif menu == "2. 데이터 라벨링 (정답지)":
-    st.header("🏷️ 데이터 라벨링 작업소")
+# --- 2. 데이터 라벨링 (클릭 방식 도입) ---
+elif menu == "2. 데이터 라벨링 (클릭 방식)":
+    st.header("🏷️ 데이터 라벨링 (클릭 방식)")
+    st.info("버그 방지를 위해 **'사진 클릭'** 방식을 사용합니다. 박스를 칠 대상의 **왼쪽 위(1) -> 오른쪽 아래(2)**를 순서대로 클릭하세요.")
     
     with st.sidebar.expander("📝 라벨(클래스) 관리", expanded=True):
         new_label = st.text_input("새 라벨 이름 입력")
@@ -128,75 +130,97 @@ elif menu == "2. 데이터 라벨링 (정답지)":
             file_names = [i['name'] for i in items]
             target_name = st.selectbox("라벨링할 사진 선택", file_names)
             target_id = [i['id'] for i in items if i['name'] == target_name][0]
-            selected_label = st.selectbox("그릴 라벨 선택", st.session_state.labels)
+            selected_label = st.selectbox("현재 찍을 라벨 선택", st.session_state.labels)
             label_idx = st.session_state.labels.index(selected_label)
 
-            if st.button("📥 사진 불러오기"):
-                st.session_state.yolo_lines = None
-                with st.spinner("사진을 캔버스에 준비 중입니다..."):
+            if st.button("📥 사진 불러오기 및 초기화"):
+                st.session_state.click_coords = []
+                st.session_state.saved_yolo_lines = []
+                with st.spinner("사진을 불러오는 중..."):
                     req = service.files().get_media(fileId=target_id)
                     original_img = Image.open(io.BytesIO(req.execute())).convert("RGB")
                     
+                    # 리사이징 (기준 폭 800)
                     width = 800
                     height = int(original_img.height * (width / original_img.width))
                     img_resized = original_img.resize((width, height))
                     
-                    # [해결 핵심] 메모리가 아닌 실제 파일(PNG)로 무조건 임시 저장합니다.
-                    temp_path = "current_canvas_bg.png"
-                    img_resized.save(temp_path, format="PNG")
-                    
                     st.session_state.loaded_image_id = target_id
-                    st.session_state.bg_image_path = temp_path
+                    st.session_state.loaded_image_pil = img_resized
 
-            # 파일이 정상적으로 저장되었는지 확인 후 캔버스 실행
-            if st.session_state.loaded_image_id == target_id and st.session_state.bg_image_path and os.path.exists(st.session_state.bg_image_path):
+            # 사진이 로드되었을 때만 실행
+            if st.session_state.loaded_image_id == target_id and st.session_state.loaded_image_pil is not None:
                 st.markdown("---")
+                col1, col2 = st.columns([2, 1])
                 
-                # 방금 저장한 실제 파일을 읽어서 캔버스에 즉시 투입!
-                bg_img_for_canvas = Image.open(st.session_state.bg_image_path)
-                
-                st.write(f"✍️ **캔버스 (현재 라벨: {selected_label})** - 사진 위에 박스를 그려주세요!")
-                canvas_result = st_canvas(
-                    fill_color="rgba(255, 165, 0, 0.3)",
-                    stroke_width=2,
-                    stroke_color="#e6a500",
-                    background_image=bg_img_for_canvas,
-                    height=bg_img_for_canvas.height,
-                    width=bg_img_for_canvas.width,
-                    drawing_mode="rect",
-                    key=f"canvas_{target_id}",
-                )
+                with col1:
+                    # 클릭 가능한 이미지 컴포넌트 (캔버스 대체)
+                    st.write(f"✍️ **{selected_label}**의 **좌측 상단**과 **우측 하단**을 클릭하세요.")
+                    img_data = st.session_state.loaded_image_pil
+                    
+                    # 현재까지의 라벨을 그려서 보여줌 (실시간 반영)
+                    img_to_draw = img_data.copy()
+                    if st.session_state.saved_yolo_lines:
+                         img_to_draw = draw_yolo_boxes(img_to_draw, st.session_state.saved_yolo_lines, st.session_state.labels)
+                    
+                    # 이미지 출력 (클릭 좌표 캡처 플러그인이 없으므로, on_click 이벤트 처리가 가능한 Streamlit 내장 기능이 제한적임)
+                    # 여기서는 캔버스 컴포넌트의 '포인트(Point)' 찍기 모드를 최소화하여 사용 (배경 날아가는 버그 회피)
+                    canvas_result = st_canvas(
+                        fill_color="red",
+                        stroke_width=5,
+                        background_image=img_to_draw,
+                        height=img_data.height,
+                        width=img_data.width,
+                        drawing_mode="point", # 'rect'가 아닌 'point' 모드 사용 (훨씬 안정적임)
+                        key=f"canvas_point_{target_id}",
+                    )
 
-                if st.button("💾 라벨 데이터(TXT) 저장 및 확인"):
-                    if canvas_result.json_data and canvas_result.json_data["objects"]:
-                        yolo_lines = []
-                        w_canvas = bg_img_for_canvas.width
-                        h_canvas = bg_img_for_canvas.height
+                with col2:
+                    st.write("📊 **라벨링 상태**")
+                    if canvas_result.json_data and "objects" in canvas_result.json_data:
+                        points = canvas_result.json_data["objects"]
+                        num_points = len(points)
+                        st.info(f"현재 찍은 점의 개수: {num_points}개")
                         
-                        for obj in canvas_result.json_data["objects"]:
-                            cx = (obj['left'] + obj['width']/2) / w_canvas
-                            cy = (obj['top'] + obj['height']/2) / h_canvas
-                            w = obj['width'] / w_canvas
-                            h = obj['height'] / h_canvas
-                            yolo_lines.append(f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                        if num_points % 2 == 0 and num_points > 0:
+                            st.success("박스 완성! 저장 버튼을 누르세요.")
+                            
+                        # 저장 로직
+                        if st.button("💾 라벨 데이터(TXT) 드라이브에 저장"):
+                            if num_points % 2 == 0 and num_points > 0:
+                                yolo_lines = []
+                                w_canvas = img_data.width
+                                h_canvas = img_data.height
+                                
+                                # 2개씩 짝지어서 좌표 계산
+                                for i in range(0, num_points, 2):
+                                    x1, y1 = points[i]['left'], points[i]['top']
+                                    x2, y2 = points[i+1]['left'], points[i+1]['top']
+                                    
+                                    # 좌상단, 우하단 정렬
+                                    left, right = min(x1, x2), max(x1, x2)
+                                    top, bottom = min(y1, y2), max(y1, y2)
+                                    
+                                    # YOLO 변환
+                                    cx = (left + right) / 2 / w_canvas
+                                    cy = (top + bottom) / 2 / h_canvas
+                                    w = (right - left) / w_canvas
+                                    h = (bottom - top) / h_canvas
+                                    
+                                    yolo_lines.append(f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                                
+                                st.session_state.saved_yolo_lines = yolo_lines
+                                txt_content = "\n".join(yolo_lines).encode()
+                                txt_name = target_name.rsplit('.', 1)[0] + ".txt"
+                                media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
+                                service.files().create(body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, media_body=media).execute()
+                                st.success(f"'{txt_name}' 정답지 저장 완료!")
+                                st.rerun()
+                            else:
+                                st.warning("점의 개수가 짝수(2개, 4개...)여야 박스가 만들어집니다.")
                         
-                        st.session_state.yolo_lines = yolo_lines
-                        txt_content = "\n".join(yolo_lines).encode()
-                        txt_name = target_name.rsplit('.', 1)[0] + ".txt"
-                        media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
-                        service.files().create(body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, media_body=media).execute()
-                        st.success(f"'{txt_name}' 정답지 저장 완료!")
-                        st.rerun()
-                    else:
-                        st.warning("박스를 그려주세요.")
-            
-            # 최종 확인창
-            if st.session_state.yolo_lines is not None and st.session_state.bg_image_path:
-                st.markdown("---")
-                st.write("✅ **최종 라벨링 결과 확인**")
-                original_image_copy = Image.open(st.session_state.bg_image_path).copy()
-                labeled_image = draw_yolo_boxes(original_image_copy, st.session_state.yolo_lines, st.session_state.labels)
-                st.image(labeled_image, use_column_width=True)
+                        if st.button("🔄 점 다시 찍기"):
+                            st.rerun()
 
         else:
             st.info("드라이브에 사진이 없습니다. 1번 메뉴에서 올려주세요.")
