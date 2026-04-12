@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas
+from streamlit_image_coordinates import streamlit_image_coordinates
 from PIL import Image, ImageDraw
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -37,7 +37,7 @@ def get_drive_service():
 service = get_drive_service()
 PARENT_FOLDER_ID = "1i7dospy3B3f4U6Nc3ZEzTk8hB3TCeaWL" 
 
-# 자동 파일명(dataN) 생성 함수
+# 자동 파일명(dataN) 생성
 def get_next_data_index():
     try:
         query = f"'{PARENT_FOLDER_ID}' in parents and name contains 'data' and trashed = false"
@@ -54,8 +54,8 @@ def get_next_data_index():
     except:
         return 1
 
-# 라벨 확인용 박스 그리기 함수
-def draw_yolo_boxes(image, yolo_lines, labels):
+# 라벨 박스 그리기 함수
+def draw_yolo_boxes(image, yolo_lines, labels, color="#e6a500"):
     draw = ImageDraw.Draw(image)
     width, height = image.size
     for line in yolo_lines:
@@ -65,27 +65,31 @@ def draw_yolo_boxes(image, yolo_lines, labels):
             top = (cy - h/2) * height
             right = (cx + w/2) * width
             bottom = (cy + h/2) * height
-            draw.rectangle([left, top, right, bottom], outline="#e6a500", width=3)
+            draw.rectangle([left, top, right, bottom], outline=color, width=3)
             class_name = labels[int(class_id)]
-            draw.text((left, top - 15), class_name, fill="#e6a500")
+            draw.text((left, top - 15), class_name, fill=color)
         except:
             continue
     return image
 
 st.set_page_config(page_title="AI 실습 통합 플랫폼", layout="wide")
 
-# 세션 상태 초기화
+# --- 세션 상태(메모리) 초기화 ---
 if "labels" not in st.session_state:
     st.session_state.labels = ["Object"]
 if "loaded_image_id" not in st.session_state:
     st.session_state.loaded_image_id = None
 if "loaded_image_pil" not in st.session_state:
     st.session_state.loaded_image_pil = None
-if "saved_yolo_lines" not in st.session_state:
-    st.session_state.saved_yolo_lines = []
+if "click_coords" not in st.session_state:
+    st.session_state.click_coords = [] # 현재 찍고 있는 점 (최대 2개)
+if "last_point" not in st.session_state:
+    st.session_state.last_point = None
+if "temp_boxes" not in st.session_state:
+    st.session_state.temp_boxes = [] # 임시 저장된 YOLO 라벨 데이터 (드라이브 전송 전 대기열)
 
 st.sidebar.title("🚀 AI 교육 플랫폼")
-menu = st.sidebar.radio("메뉴 선택", ["1. 데이터 수집 (업로드)", "2. 데이터 라벨링 (드래그 방식)", "3. AI 모델 분석 (YOLOv8)"])
+menu = st.sidebar.radio("메뉴 선택", ["1. 데이터 수집 (업로드)", "2. 데이터 라벨링 (클릭 방식)", "3. AI 모델 분석 (YOLOv8)"])
 
 # --- 1. 데이터 수집 ---
 if menu == "1. 데이터 수집 (업로드)":
@@ -107,10 +111,9 @@ if menu == "1. 데이터 수집 (업로드)":
         else:
             st.warning("사진을 첨부해주세요.")
 
-# --- 2. 데이터 라벨링 (드래그 방식 복구) ---
-elif menu == "2. 데이터 라벨링 (드래그 방식)":
-    st.header("🏷️ 데이터 라벨링 (드래그 방식)")
-    st.info("사진 위에서 마우스를 부드럽게 드래그하여 박스를 그려주세요.")
+# --- 2. 데이터 라벨링 (임시저장 -> 일괄전송 구조) ---
+elif menu == "2. 데이터 라벨링 (클릭 방식)":
+    st.header("🏷️ 데이터 라벨링 (클릭 방식)")
     
     with st.sidebar.expander("📝 라벨(클래스) 관리", expanded=True):
         new_label = st.text_input("새 라벨 이름 입력")
@@ -129,12 +132,16 @@ elif menu == "2. 데이터 라벨링 (드래그 방식)":
             file_names = [i['name'] for i in items]
             target_name = st.selectbox("라벨링할 사진 선택", file_names)
             target_id = [i['id'] for i in items if i['name'] == target_name][0]
-            selected_label = st.selectbox("현재 그릴 라벨 선택", st.session_state.labels)
+            selected_label = st.selectbox("현재 찍을 라벨 선택", st.session_state.labels)
             label_idx = st.session_state.labels.index(selected_label)
 
-            if st.button("📥 사진 불러오기 및 초기화"):
-                st.session_state.saved_yolo_lines = []
-                with st.spinner("가져오는 중..."):
+            if st.button("📥 사진 불러오기 및 캔버스 초기화"):
+                # 다른 사진을 불러오면 임시 메모리 모두 초기화
+                st.session_state.click_coords = []
+                st.session_state.last_point = None
+                st.session_state.temp_boxes = [] 
+                
+                with st.spinner("사진을 불러오는 중..."):
                     req = service.files().get_media(fileId=target_id)
                     original_img = Image.open(io.BytesIO(req.execute())).convert("RGB")
                     
@@ -142,66 +149,94 @@ elif menu == "2. 데이터 라벨링 (드래그 방식)":
                     height = int(original_img.height * (width / original_img.width))
                     img_resized = original_img.resize((width, height))
                     
-                    # [블랙스크린 방지] 메모리 세탁 과정 (PNG 포맷으로 변환하여 찌꺼기 데이터 제거)
-                    temp_bytes = io.BytesIO()
-                    img_resized.save(temp_bytes, format="PNG")
-                    clean_image = Image.open(temp_bytes)
-                    
                     st.session_state.loaded_image_id = target_id
-                    st.session_state.loaded_image_pil = clean_image
+                    st.session_state.loaded_image_pil = img_resized
 
             if st.session_state.loaded_image_id == target_id and st.session_state.loaded_image_pil is not None:
                 st.markdown("---")
                 col1, col2 = st.columns([2, 1])
                 
                 with col1:
-                    st.write(f"✍️ **캔버스 (현재 라벨: {selected_label})**")
+                    st.write(f"✍️ **{selected_label}**의 **좌측 상단**과 **우측 하단**을 클릭하세요.")
+                    img_data = st.session_state.loaded_image_pil
+                    img_to_draw = img_data.copy()
+                    draw = ImageDraw.Draw(img_to_draw)
                     
-                    # 캔버스 렌더링 (끊김 없음!)
-                    canvas_result = st_canvas(
-                        fill_color="rgba(255, 165, 0, 0.3)",
-                        stroke_width=2,
-                        stroke_color="#e6a500",
-                        background_image=st.session_state.loaded_image_pil,
-                        height=st.session_state.loaded_image_pil.height,
-                        width=st.session_state.loaded_image_pil.width,
-                        drawing_mode="rect",
-                        key=f"canvas_{target_id}",
-                    )
+                    # 1. 이미 임시저장된 박스들 그리기 (주황색)
+                    if st.session_state.temp_boxes:
+                         img_to_draw = draw_yolo_boxes(img_to_draw, st.session_state.temp_boxes, st.session_state.labels, color="#e6a500")
+                    
+                    # 2. 지금 마우스로 찍고 있는 점과 임시 선 그리기 (빨간색)
+                    for i, p in enumerate(st.session_state.click_coords):
+                        r = 4 
+                        draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), fill="red")
+                        
+                        # 점이 2개가 되면 닫힌 박스로 보여줌
+                        if i == 1:
+                            p1 = st.session_state.click_coords[0]
+                            p2 = p
+                            draw.rectangle([min(p1[0], p2[0]), min(p1[1], p2[1]), max(p1[0], p2[0]), max(p1[1], p2[1])], outline="red", width=2)
+
+                    value = streamlit_image_coordinates(img_to_draw, key=f"img_coords_{target_id}_{len(st.session_state.temp_boxes)}_{len(st.session_state.click_coords)}")
+
+                    if value is not None:
+                        point = (value["x"], value["y"])
+                        if point != st.session_state.last_point:
+                            # 점은 최대 2개까지만 기록
+                            if len(st.session_state.click_coords) < 2:
+                                st.session_state.click_coords.append(point)
+                                st.session_state.last_point = point
+                                st.rerun()
 
                 with col2:
-                    st.write("📊 **저장 관리**")
-                    if st.button("💾 라벨 데이터(TXT) 드라이브에 저장"):
-                        if canvas_result.json_data and canvas_result.json_data["objects"]:
-                            yolo_lines = []
-                            w_canvas = st.session_state.loaded_image_pil.width
-                            h_canvas = st.session_state.loaded_image_pil.height
+                    st.write("📊 **임시 저장소 관리**")
+                    st.info(f"현재 찍은 점: {len(st.session_state.click_coords)} / 2")
+                    
+                    # 점 2개가 찍혔을 때 '임시 저장' 버튼 활성화
+                    if len(st.session_state.click_coords) == 2:
+                        st.success("박스 영역이 지정되었습니다. 임시 저장하세요!")
+                        if st.button("🔽 현재 박스 임시 저장 (서버 전송 안됨)"):
+                            w_canvas = img_data.width
+                            h_canvas = img_data.height
                             
-                            for obj in canvas_result.json_data["objects"]:
-                                cx = (obj['left'] + obj['width']/2) / w_canvas
-                                cy = (obj['top'] + obj['height']/2) / h_canvas
-                                w = obj['width'] / w_canvas
-                                h = obj['height'] / h_canvas
-                                yolo_lines.append(f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                            x1, y1 = st.session_state.click_coords[0]
+                            x2, y2 = st.session_state.click_coords[1]
+                            left, right = min(x1, x2), max(x1, x2)
+                            top, bottom = min(y1, y2), max(y1, y2)
                             
-                            st.session_state.saved_yolo_lines = yolo_lines
-                            txt_content = "\n".join(yolo_lines).encode()
+                            cx = (left + right) / 2 / w_canvas
+                            cy = (top + bottom) / 2 / h_canvas
+                            w = (right - left) / w_canvas
+                            h = (bottom - top) / h_canvas
+                            
+                            yolo_format = f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}"
+                            st.session_state.temp_boxes.append(yolo_format)
+                            
+                            # 저장 후 점 초기화
+                            st.session_state.click_coords = []
+                            st.session_state.last_point = None
+                            st.rerun()
+
+                    if st.button("🔄 점 다시 찍기 (초기화)"):
+                        st.session_state.click_coords = []
+                        st.session_state.last_point = None
+                        st.rerun()
+
+                    st.markdown("---")
+                    st.write("🚀 **최종 구글 드라이브 전송**")
+                    st.write(f"현재 임시 보관된 라벨: **{len(st.session_state.temp_boxes)}** 개")
+                    
+                    # 임시 저장된 데이터가 있을 때만 최종 전송 버튼 활성화
+                    if len(st.session_state.temp_boxes) > 0:
+                        if st.button("💾 모든 임시 데이터를 구글 드라이브로 최종 전송", type="primary"):
+                            txt_content = "\n".join(st.session_state.temp_boxes).encode()
                             txt_name = target_name.rsplit('.', 1)[0] + ".txt"
                             media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
+                            
+                            # 여기서 비로소 단 한 번 구글 드라이브와 통신합니다!
                             service.files().create(body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, media_body=media).execute()
                             
-                            st.success(f"'{txt_name}' 정답지 저장 완료!")
-                            st.rerun()
-                        else:
-                            st.warning("먼저 박스를 부드럽게 그려주세요.")
-            
-            # 최종 확인 창
-            if st.session_state.saved_yolo_lines:
-                st.markdown("---")
-                st.write("✅ **최종 라벨링 결과 확인**")
-                original_image_copy = st.session_state.loaded_image_pil.copy()
-                labeled_image = draw_yolo_boxes(original_image_copy, st.session_state.saved_yolo_lines, st.session_state.labels)
-                st.image(labeled_image, use_column_width=True)
+                            st.success(f"🎉 성공! '{txt_name}' 파일이 드라이브에 저장되었습니다.")
 
         else:
             st.info("드라이브에 사진이 없습니다. 1번 메뉴에서 올려주세요.")
