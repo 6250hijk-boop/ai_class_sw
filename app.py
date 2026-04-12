@@ -50,7 +50,7 @@ def get_next_data_index():
 
 st.set_page_config(page_title="AI 실습 통합 관리자", layout="wide")
 
-# 세션 상태 초기화 (라벨 및 이미지 로드 상태 유지)
+# 세션 상태 초기화
 if "labels" not in st.session_state:
     st.session_state.labels = ["Object"]
 if "loaded_image_id" not in st.session_state:
@@ -111,25 +111,27 @@ elif menu == "2. 데이터 라벨링 (정답지 작성)":
             selected_label = st.selectbox("그릴 라벨 선택", st.session_state.labels)
             label_idx = st.session_state.labels.index(selected_label)
 
-            # [수정됨] 명시적인 '불러오기' 버튼 추가
             if st.button("📥 선택한 사진 불러오기"):
                 with st.spinner("드라이브에서 사진을 가져오는 중..."):
                     req = service.files().get_media(fileId=target_id)
-                    img = Image.open(io.BytesIO(req.execute())).convert("RGB")
+                    original_img = Image.open(io.BytesIO(req.execute())).convert("RGB")
                     
                     # 리사이징
                     width = 800
-                    height = int(img.height * (width / img.width))
-                    img_resized = img.resize((width, height))
+                    height = int(original_img.height * (width / original_img.width))
+                    img_resized = original_img.resize((width, height))
                     
-                    # 세션에 저장 (버튼을 눌러도 사진이 유지되도록)
+                    # [핵심 해결책] 깨끗한 새 도화지(흰색 바탕)를 만들고 그 위에 사진을 붙입니다.
+                    # 이렇게 하면 메타데이터 충돌로 인한 블랙스크린 오류가 사라집니다.
+                    clean_canvas = Image.new("RGB", (width, height), (255, 255, 255))
+                    clean_canvas.paste(img_resized, (0, 0))
+                    
                     st.session_state.loaded_image_id = target_id
-                    st.session_state.loaded_image_pil = img_resized
+                    st.session_state.loaded_image_pil = clean_canvas
 
-            # 사진이 정상적으로 로드되었을 때만 미리보기와 캔버스를 띄움
             if st.session_state.loaded_image_id == target_id and st.session_state.loaded_image_pil is not None:
                 st.markdown("---")
-                col1, col2 = st.columns([1, 2]) # 화면 분할 (미리보기 | 캔버스)
+                col1, col2 = st.columns([1, 2])
                 
                 with col1:
                     st.write("🔎 **원본 미리보기**")
