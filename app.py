@@ -1,5 +1,5 @@
 import streamlit as st
-from streamlit_drawable_canvas import st_canvas  # <- 이 부분이 빠져서 났던 에러입니다!
+from streamlit_image_coordinates import streamlit_image_coordinates
 from PIL import Image, ImageDraw
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -83,6 +83,8 @@ if "loaded_image_pil" not in st.session_state:
     st.session_state.loaded_image_pil = None
 if "click_coords" not in st.session_state:
     st.session_state.click_coords = []
+if "last_point" not in st.session_state:
+    st.session_state.last_point = None
 if "saved_yolo_lines" not in st.session_state:
     st.session_state.saved_yolo_lines = []
 
@@ -109,10 +111,10 @@ if menu == "1. 데이터 수집 (업로드)":
         else:
             st.warning("사진을 첨부해주세요.")
 
-# --- 2. 데이터 라벨링 (클릭 방식) ---
+# --- 2. 데이터 라벨링 (캔버스 제거, 클릭 방식 도입) ---
 elif menu == "2. 데이터 라벨링 (클릭 방식)":
     st.header("🏷️ 데이터 라벨링 (클릭 방식)")
-    st.info("버그 방지를 위해 **'사진 클릭'** 방식을 사용합니다. 박스를 칠 대상의 **왼쪽 위(1) -> 오른쪽 아래(2)**를 순서대로 클릭하세요.")
+    st.info("사진 위에 직접 점을 찍어 박스를 만듭니다. 사물의 **왼쪽 위 모서리**와 **오른쪽 아래 모서리**를 차례로 클릭하세요.")
     
     with st.sidebar.expander("📝 라벨(클래스) 관리", expanded=True):
         new_label = st.text_input("새 라벨 이름 입력")
@@ -136,6 +138,7 @@ elif menu == "2. 데이터 라벨링 (클릭 방식)":
 
             if st.button("📥 사진 불러오기 및 초기화"):
                 st.session_state.click_coords = []
+                st.session_state.last_point = None
                 st.session_state.saved_yolo_lines = []
                 with st.spinner("사진을 불러오는 중..."):
                     req = service.files().get_media(fileId=target_id)
@@ -157,60 +160,79 @@ elif menu == "2. 데이터 라벨링 (클릭 방식)":
                     img_data = st.session_state.loaded_image_pil
                     img_to_draw = img_data.copy()
                     
+                    # 1. 기존에 저장된 박스 먼저 그리기
                     if st.session_state.saved_yolo_lines:
                          img_to_draw = draw_yolo_boxes(img_to_draw, st.session_state.saved_yolo_lines, st.session_state.labels)
                     
-                    canvas_result = st_canvas(
-                        fill_color="red",
-                        stroke_width=5,
-                        background_image=img_to_draw,
-                        height=img_data.height,
-                        width=img_data.width,
-                        drawing_mode="point",
-                        key=f"canvas_point_{target_id}",
-                    )
+                    # 2. 현재 클릭 중인 점과 빨간색 임시 박스 그리기
+                    draw = ImageDraw.Draw(img_to_draw)
+                    for i, p in enumerate(st.session_state.click_coords):
+                        r = 4 # 빨간 점 크기
+                        draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), fill="red")
+                        
+                        # 점이 2개(짝수) 모일 때마다 박스 선을 그려줌
+                        if i % 2 == 1:
+                            p1 = st.session_state.click_coords[i-1]
+                            p2 = p
+                            draw.rectangle([min(p1[0], p2[0]), min(p1[1], p2[1]), max(p1[0], p2[0]), max(p1[1], p2[1])], outline="red", width=2)
+
+                    # 블랙스크린 절대 안 뜨는 이미지 클릭 도구 출력
+                    value = streamlit_image_coordinates(img_to_draw, key=f"img_coords_{target_id}")
+
+                    # 클릭 이벤트 발생 시 좌표 저장
+                    if value is not None:
+                        point = (value["x"], value["y"])
+                        if point != st.session_state.last_point:
+                            st.session_state.click_coords.append(point)
+                            st.session_state.last_point = point
+                            st.rerun() # 점을 찍자마자 화면을 갱신하여 점을 보여줌
 
                 with col2:
                     st.write("📊 **라벨링 상태**")
-                    if canvas_result.json_data and "objects" in canvas_result.json_data:
-                        points = canvas_result.json_data["objects"]
-                        num_points = len(points)
-                        st.info(f"현재 찍은 점의 개수: {num_points}개")
+                    num_points = len(st.session_state.click_coords)
+                    st.info(f"현재 찍은 점의 개수: {num_points}개")
+                    
+                    if num_points % 2 == 0 and num_points > 0:
+                        st.success("박스 완성! 저장 버튼을 누르세요.")
                         
+                    if st.button("💾 라벨 데이터(TXT) 드라이브에 저장"):
                         if num_points % 2 == 0 and num_points > 0:
-                            st.success("박스 완성! 저장 버튼을 누르세요.")
+                            yolo_lines = []
+                            w_canvas = img_data.width
+                            h_canvas = img_data.height
                             
-                        if st.button("💾 라벨 데이터(TXT) 드라이브에 저장"):
-                            if num_points % 2 == 0 and num_points > 0:
-                                yolo_lines = []
-                                w_canvas = img_data.width
-                                h_canvas = img_data.height
+                            for i in range(0, num_points, 2):
+                                x1, y1 = st.session_state.click_coords[i]
+                                x2, y2 = st.session_state.click_coords[i+1]
+                                left, right = min(x1, x2), max(x1, x2)
+                                top, bottom = min(y1, y2), max(y1, y2)
                                 
-                                for i in range(0, num_points, 2):
-                                    x1, y1 = points[i]['left'], points[i]['top']
-                                    x2, y2 = points[i+1]['left'], points[i+1]['top']
-                                    left, right = min(x1, x2), max(x1, x2)
-                                    top, bottom = min(y1, y2), max(y1, y2)
-                                    
-                                    cx = (left + right) / 2 / w_canvas
-                                    cy = (top + bottom) / 2 / h_canvas
-                                    w = (right - left) / w_canvas
-                                    h = (bottom - top) / h_canvas
-                                    
-                                    yolo_lines.append(f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                                cx = (left + right) / 2 / w_canvas
+                                cy = (top + bottom) / 2 / h_canvas
+                                w = (right - left) / w_canvas
+                                h = (bottom - top) / h_canvas
                                 
-                                st.session_state.saved_yolo_lines = yolo_lines
-                                txt_content = "\n".join(yolo_lines).encode()
-                                txt_name = target_name.rsplit('.', 1)[0] + ".txt"
-                                media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
-                                service.files().create(body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, media_body=media).execute()
-                                st.success(f"'{txt_name}' 정답지 저장 완료!")
-                                st.rerun()
-                            else:
-                                st.warning("점의 개수가 짝수(2개, 4개...)여야 박스가 만들어집니다.")
-                        
-                        if st.button("🔄 점 다시 찍기"):
+                                yolo_lines.append(f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                            
+                            # 기존 라벨에 덮어쓰기 (또는 추가)
+                            st.session_state.saved_yolo_lines = yolo_lines
+                            txt_content = "\n".join(yolo_lines).encode()
+                            txt_name = target_name.rsplit('.', 1)[0] + ".txt"
+                            media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
+                            service.files().create(body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, media_body=media).execute()
+                            
+                            # 저장 후 점 초기화
+                            st.session_state.click_coords = []
+                            st.session_state.last_point = None
+                            st.success(f"'{txt_name}' 정답지 저장 완료!")
                             st.rerun()
+                        else:
+                            st.warning("점의 개수가 짝수(2개, 4개...)여야 박스가 만들어집니다.")
+                    
+                    if st.button("🔄 점 모두 지우기"):
+                        st.session_state.click_coords = []
+                        st.session_state.last_point = None
+                        st.rerun()
 
         else:
             st.info("드라이브에 사진이 없습니다. 1번 메뉴에서 올려주세요.")
