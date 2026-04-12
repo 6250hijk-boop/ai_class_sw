@@ -50,19 +50,23 @@ def get_next_data_index():
 
 st.set_page_config(page_title="AI 실습 통합 관리자", layout="wide")
 
-# 세션 상태 초기화 (라벨 목록 저장)
+# 세션 상태 초기화 (라벨 및 이미지 로드 상태 유지)
 if "labels" not in st.session_state:
     st.session_state.labels = ["Object"]
+if "loaded_image_id" not in st.session_state:
+    st.session_state.loaded_image_id = None
+if "loaded_image_pil" not in st.session_state:
+    st.session_state.loaded_image_pil = None
 
 st.sidebar.title("🚀 AI 교육 센터")
 menu = st.sidebar.radio("메뉴 선택", ["1. 데이터 수집 (자동 이름변경)", "2. 데이터 라벨링 (정답지 작성)", "3. AI 모델 분석 (테스트)"])
 
-# --- 1. 데이터 수집 (업로드 및 자동 이름 변경) ---
+# --- 1. 데이터 수집 ---
 if menu == "1. 데이터 수집 (자동 이름변경)":
     st.header("📸 학습 데이터 업로드")
     st.info("사진을 올리면 'data1, data2...' 순서로 이름이 바뀌어 드라이브에 저장됩니다.")
     
-    files = st.file_uploader("사진을 선택하세요 (여러 장 가능)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+    files = st.file_uploader("사진을 선택하세요", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
     
     if st.button("드라이브로 전송 시작"):
         if files:
@@ -78,15 +82,14 @@ if menu == "1. 데이터 수집 (자동 이름변경)":
                 current_idx += 1
                 progress_bar.progress((i + 1) / len(files))
                 
-            st.success(f"성공! 총 {len(files)}장의 데이터가 data{current_idx-len(files)}~data{current_idx-1}로 저장되었습니다.")
+            st.success(f"성공! 총 {len(files)}장의 사진이 저장되었습니다.")
         else:
             st.warning("먼저 파일을 선택해 주세요.")
 
-# --- 2. 데이터 라벨링 (TXT 동시 저장) ---
+# --- 2. 데이터 라벨링 ---
 elif menu == "2. 데이터 라벨링 (정답지 작성)":
     st.header("🏷️ 공동 데이터 라벨링")
     
-    # 사이드바 라벨 관리
     with st.sidebar.expander("📝 라벨(클래스) 관리", expanded=True):
         new_label = st.text_input("새 라벨 이름 입력")
         if st.button("라벨 추가"):
@@ -96,7 +99,6 @@ elif menu == "2. 데이터 라벨링 (정답지 작성)":
         st.write("목록:", ", ".join(st.session_state.labels))
 
     try:
-        # 이미지 파일 목록 호출
         query = f"'{PARENT_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false"
         results = service.files().list(q=query, fields="files(id, name)").execute()
         items = results.get('files', [])
@@ -109,69 +111,79 @@ elif menu == "2. 데이터 라벨링 (정답지 작성)":
             selected_label = st.selectbox("그릴 라벨 선택", st.session_state.labels)
             label_idx = st.session_state.labels.index(selected_label)
 
-            # 이미지 다운로드 및 PIL 변환 (가장 안정적인 방식)
-            req = service.files().get_media(fileId=target_id)
-            img = Image.open(io.BytesIO(req.execute())).convert("RGB")
-            
-            # 화면에 맞게 리사이징 (800px 기준)
-            width = 800
-            height = int(img.height * (width / img.width))
-            img_resized = img.resize((width, height))
-            
-            st.write(f"현재 선택된 라벨: **{selected_label}** (ID: {label_idx})")
-            
-            # 라벨링 캔버스 (key에 target_id를 넣어 사진 변경 시 강제 갱신)
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 165, 0, 0.3)",
-                stroke_width=2,
-                stroke_color="#e6a500",
-                background_image=img_resized,
-                height=height,
-                width=width,
-                drawing_mode="rect",
-                key=f"canv_{target_id}",
-            )
-
-            if st.button("라벨 데이터(TXT) 저장"):
-                if canvas_result.json_data and canvas_result.json_data["objects"]:
-                    yolo_lines = []
-                    for obj in canvas_result.json_data["objects"]:
-                        cx = (obj['left'] + obj['width']/2) / width
-                        cy = (obj['top'] + obj['height']/2) / height
-                        w = obj['width'] / width
-                        h = obj['height'] / height
-                        # YOLO 포맷: [ID] [중심X] [중심Y] [가로] [세로]
-                        yolo_lines.append(f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+            # [수정됨] 명시적인 '불러오기' 버튼 추가
+            if st.button("📥 선택한 사진 불러오기"):
+                with st.spinner("드라이브에서 사진을 가져오는 중..."):
+                    req = service.files().get_media(fileId=target_id)
+                    img = Image.open(io.BytesIO(req.execute())).convert("RGB")
                     
-                    # TXT 파일 생성 및 드라이브 저장
-                    txt_name = target_name.rsplit('.', 1)[0] + ".txt"
-                    txt_content = "\n".join(yolo_lines).encode()
-                    media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
-                    service.files().create(
-                        body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, 
-                        media_body=media
-                    ).execute()
-                    st.success(f"'{txt_name}' 파일 저장 완료! 이제 AI 학습 준비가 되었습니다.")
-                else:
-                    st.warning("박스를 먼저 그려주세요.")
-        else:
-            st.info("드라이브에 사진이 없습니다. 1번 메뉴에서 먼저 업로드해 주세요.")
-    except Exception as e:
-        st.error(f"이미지를 불러오지 못했습니다. 오류: {e}")
+                    # 리사이징
+                    width = 800
+                    height = int(img.height * (width / img.width))
+                    img_resized = img.resize((width, height))
+                    
+                    # 세션에 저장 (버튼을 눌러도 사진이 유지되도록)
+                    st.session_state.loaded_image_id = target_id
+                    st.session_state.loaded_image_pil = img_resized
 
-# --- 3. 모델 분석 (추후 학습 모델 연결용) ---
+            # 사진이 정상적으로 로드되었을 때만 미리보기와 캔버스를 띄움
+            if st.session_state.loaded_image_id == target_id and st.session_state.loaded_image_pil is not None:
+                st.markdown("---")
+                col1, col2 = st.columns([1, 2]) # 화면 분할 (미리보기 | 캔버스)
+                
+                with col1:
+                    st.write("🔎 **원본 미리보기**")
+                    st.image(st.session_state.loaded_image_pil, use_column_width=True)
+                
+                with col2:
+                    st.write(f"✍️ **캔버스 (현재 라벨: {selected_label})**")
+                    canvas_result = st_canvas(
+                        fill_color="rgba(255, 165, 0, 0.3)",
+                        stroke_width=2,
+                        stroke_color="#e6a500",
+                        background_image=st.session_state.loaded_image_pil,
+                        height=st.session_state.loaded_image_pil.height,
+                        width=st.session_state.loaded_image_pil.width,
+                        drawing_mode="rect",
+                        key=f"canvas_{target_id}",
+                    )
+
+                    if st.button("💾 라벨 데이터(TXT) 저장"):
+                        if canvas_result.json_data and canvas_result.json_data["objects"]:
+                            yolo_lines = []
+                            w_canvas = st.session_state.loaded_image_pil.width
+                            h_canvas = st.session_state.loaded_image_pil.height
+                            
+                            for obj in canvas_result.json_data["objects"]:
+                                cx = (obj['left'] + obj['width']/2) / w_canvas
+                                cy = (obj['top'] + obj['height']/2) / h_canvas
+                                w = obj['width'] / w_canvas
+                                h = obj['height'] / h_canvas
+                                yolo_lines.append(f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                            
+                            txt_name = target_name.rsplit('.', 1)[0] + ".txt"
+                            txt_content = "\n".join(yolo_lines).encode()
+                            media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
+                            service.files().create(
+                                body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, 
+                                media_body=media
+                            ).execute()
+                            st.success(f"'{txt_name}' 파일 저장 완료!")
+                        else:
+                            st.warning("박스를 먼저 그려주세요.")
+        else:
+            st.info("드라이브에 사진이 없습니다. 1번 메뉴에서 업로드해 주세요.")
+    except Exception as e:
+        st.error(f"오류: {e}")
+
+# --- 3. 모델 분석 ---
 elif menu == "3. AI 모델 분석 (테스트)":
     st.header("🔍 학습 결과 분석")
-    st.write("라벨링한 데이터를 바탕으로 학습된 인공지능이 사물을 인식하는 곳입니다.")
+    st.write("학습된 인공지능 모델(.pt)을 나중에 이곳에 연동하여 결과를 확인할 수 있습니다.")
     
-    test_file = st.file_uploader("분석할 사진을 선택하세요", type=['jpg', 'jpeg', 'png'])
-    
+    test_file = st.file_uploader("분석할 사진 업로드", type=['jpg', 'jpeg', 'png'])
     if test_file:
         st.image(test_file, caption="분석 대상 사진", use_column_width=True)
-        
-        if st.button("AI 분석 시작"):
-            # 실제 분석을 위해서는 YOLO 학습 완료 후 생성된 .pt 파일이 필요합니다.
-            # 여기서는 라벨링된 정보를 기반으로 한 '시뮬레이션' 결과를 보여줍니다.
-            st.info("⏳ 현재 수집된 데이터를 바탕으로 분석 중입니다...")
-            st.success(f"분석 결과: {st.session_state.labels[0]} (일치율 98.5%)")
-            st.caption("참고: 실제 분석을 위해서는 모인 데이터를 구글 코랩(Colab)에서 학습시켜야 합니다.")
+        if st.button("AI 분석 실행"):
+            st.info("⏳ 현재 시뮬레이션 분석 중입니다...")
+            st.success(f"분석 결과: {st.session_state.labels[0]}")
