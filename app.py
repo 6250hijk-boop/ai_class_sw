@@ -9,13 +9,20 @@ import io
 import os
 import re
 
-# YOLO 라이브러리
+# YOLO 라이브러리 (분석 탭에서 사용)
 try:
     from ultralytics import YOLO
 except ImportError:
     YOLO = None
 
-# 구글 드라이브 서비스 연결
+# [최적화] 모델을 한 번만 불러와서 메모리에 저장해두는 함수 (속도 향상)
+@st.cache_resource
+def load_yolo_model(model_path):
+    if os.path.exists(model_path):
+        return YOLO(model_path)
+    return None
+
+# 1. 구글 드라이브 서비스 연결
 def get_drive_service():
     if "google_oauth" in st.secrets:
         oauth_info = st.secrets["google_oauth"]
@@ -54,7 +61,7 @@ def draw_yolo_boxes(image, yolo_lines, labels, color="#e6a500"):
         except: continue
     return image
 
-st.set_page_config(page_title="YOLOv8 실습 관리자", layout="wide")
+st.set_page_config(page_title="AI 데이터 센터", layout="wide")
 
 if "labels" not in st.session_state: st.session_state.labels = ["Object"]
 if "loaded_image_id" not in st.session_state: st.session_state.loaded_image_id = None
@@ -63,10 +70,15 @@ if "click_coords" not in st.session_state: st.session_state.click_coords = []
 if "temp_boxes" not in st.session_state: st.session_state.temp_boxes = []
 
 st.sidebar.title("🚀 AI 데이터 센터")
-menu = st.sidebar.radio("메뉴 선택", ["1. 사진 업로드 (640x640)", "2. 클릭 방식 라벨링", "3. AI 모델 분석 (정확도 표시)"])
+# ★ 메뉴 이름을 변수에 담아 일관성 있게 관리합니다.
+MENU_1 = "1. 사진 업로드 (640x640)"
+MENU_2 = "2. 클릭 방식 라벨링"
+MENU_3 = "3. AI 모델 분석 (정확도 표시)"
+
+menu = st.sidebar.radio("메뉴 선택", [MENU_1, MENU_2, MENU_3])
 
 # --- 1. 사진 업로드 ---
-if menu == "1. 사진 업로드 (640x640)":
+if menu == MENU_1:
     st.header("📸 학습 데이터 업로드")
     files = st.file_uploader("사진 선택", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
     if st.button("드라이브 전송") and files:
@@ -80,7 +92,7 @@ if menu == "1. 사진 업로드 (640x640)":
         st.success("업로드 완료!")
 
 # --- 2. 라벨링 ---
-elif menu == "2. 클릭 방식 라벨링":
+elif menu == MENU_2:
     st.header("🏷️ 데이터 라벨링")
     with st.sidebar.expander("📝 라벨 관리"):
         new_name = st.text_input("라벨 이름 수정", value=st.session_state.labels[0])
@@ -119,46 +131,41 @@ elif menu == "2. 클릭 방식 라벨링":
                     service.files().create(body={'name': target.rsplit('.', 1)[0]+".txt", 'parents': [PARENT_FOLDER_ID]}, media_body=MediaInMemoryUpload("\n".join(st.session_state.temp_boxes).encode(), mimetype='text/plain')).execute()
                     st.success("저장 완료!")
 
-# --- 3. AI 모델 분석 (업그레이드) ---
-elif menu == "3. AI 모델 분석":
+# --- 3. AI 모델 분석 (이름 일치 수정 및 캐싱 적용) ---
+elif menu == MENU_3:
     st.header("🔍 AI 사물 분석 및 정확도 확인")
     model_path = "best.pt"
     
-    if not os.path.exists(model_path):
-        st.warning("⚠️ GitHub에 best.pt 파일을 먼저 업로드해주세요.")
+    model = load_yolo_model(model_path)
+    
+    if model is None:
+        st.warning("⚠️ GitHub에 best.pt 파일을 업로드한 뒤 잠시만 기다려주세요. (최초 로딩은 1분 정도 소요될 수 있습니다.)")
     else:
-        model = YOLO(model_path)
-        test_file = st.file_uploader("분석할 사진 선택", type=['jpg', 'jpeg', 'png'])
+        test_file = st.file_uploader("분석할 사진을 업로드하세요", type=['jpg', 'jpeg', 'png'])
         
         if test_file:
             img = Image.open(test_file).convert("RGB")
             
             if st.button("🚀 분석 실행"):
-                with st.spinner("AI가 분석 중입니다..."):
+                with st.spinner("AI가 사진 속 사물을 찾는 중..."):
                     results = model(img)
                     res = results[0]
                     
-                    # 화면 분할: 결과 이미지와 수치 결과
                     col1, col2 = st.columns([2, 1])
                     
                     with col1:
                         st.subheader("🖼️ 분석 결과 이미지")
-                        # AI가 그린 박스가 포함된 이미지 출력
                         st.image(res.plot(), use_column_width=True)
                     
                     with col2:
                         st.subheader("📊 검출 데이터")
                         if len(res.boxes) > 0:
                             st.write(f"총 **{len(res.boxes)}개**의 사물을 찾았습니다.")
-                            
-                            # 각 검출 결과에 대해 이름과 정확도(Confidence) 추출
                             for i, box in enumerate(res.boxes):
                                 cls_id = int(box.cls[0])
                                 label = model.names[cls_id]
-                                conf = float(box.conf[0]) * 100 # 확률을 %로 변환
-                                
-                                # 깔끔한 카드 형태로 출력
+                                conf = float(box.conf[0]) * 100
                                 st.info(f"**[{i+1}] {label}**\n\n정확도: **{conf:.1f}%**")
-                                st.progress(conf / 100) # 시각적인 바 표시
+                                st.progress(conf / 100)
                         else:
-                            st.error("검출된 사물이 없습니다. 다른 사진으로 시도해보세요.")
+                            st.error("검출된 사물이 없습니다. 다른 사진으로 테스트해보세요.")
