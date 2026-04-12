@@ -2,7 +2,6 @@ streamlit==1.31.1
 streamlit-image-coordinates
 Pillow
 google-auth
-google-auth-oauthlib
 google-api-python-client
 ultralytics
 opencv-python-headless
