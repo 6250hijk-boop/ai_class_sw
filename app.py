@@ -1,44 +1,52 @@
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 from PIL import Image
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 import io
 
-# 구글 드라이브 서비스 연결 함수
+# 1. 구글 드라이브 서비스 연결 함수 (OAuth 2.0 개인 계정용)
 def get_drive_service():
-    if "gcp_service_account" in st.secrets:
-        key_dict = st.secrets["gcp_service_account"]
+    if "google_oauth" in st.secrets:
+        oauth_info = st.secrets["google_oauth"]
         
-        # 1. 권한 범위(SCOPES) 명시적 지정 (이 부분이 추가되었습니다)
-        SCOPES = ['https://www.googleapis.com/auth/drive']
+        # Secrets에서 정보를 가져와 자격 증명 생성
+        creds = Credentials(
+            token=None,
+            refresh_token=oauth_info["refresh_token"],
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=oauth_info["client_id"],
+            client_secret=oauth_info["client_secret"],
+            scopes=['https://www.googleapis.com/auth/drive']
+        )
         
-        # 2. .with_scopes(SCOPES)를 사용하여 권한 부여
-        creds = service_account.Credentials.from_service_account_info(
-            key_dict
-        ).with_scopes(SCOPES)
+        # 토큰이 만료되었을 경우 자동 갱신
+        if not creds.valid:
+            creds.refresh(Request())
+            
+        return build('drive', 'v3', credentials=creds)
     else:
-        st.error("구글 API 키가 설정되지 않았습니다. Secrets를 확인해주세요.")
+        st.error("구글 OAuth 설정(Secrets)이 되지 않았습니다. '[google_oauth]' 섹션을 확인해주세요.")
         st.stop()
-    return build('drive', 'v3', credentials=creds)
 
-# 서비스 객체 초기화
+# 드라이브 서비스 초기화
 service = get_drive_service()
 
-# 선생님의 구글 드라이브 폴더 ID (기존 ID 유지)
+# 2. 저장될 폴더 ID (선생님이 만드신 폴더 ID를 유지합니다)
 PARENT_FOLDER_ID = "1i7dospy3B3f4U6Nc3ZEzTk8hB3TCeaWL" 
 
 st.set_page_config(page_title="AI 실습 데이터 수집기", layout="wide")
 
-# 사이드바 메뉴
+# 사이드바 메뉴 구성
 menu = st.sidebar.radio("메뉴 선택", ["사진 업로드", "공동 라벨링"])
 
 if menu == "사진 업로드":
     st.header("📸 학습용 사진 업로드")
-    st.info("우리 반 인공지능 학습을 위해 실습 도구 사진을 찍어 올려주세요.")
+    st.info("우리 반 인공지능 학습을 위해 실습 도구 사진을 찍어 올려주세요. (로그인 없이 업로드 가능)")
     
-    files = st.file_uploader("사진 선택", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+    files = st.file_uploader("사진 선택 (여러 장 가능)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
     
     if st.button("드라이브로 전송"):
         if files:
@@ -50,8 +58,8 @@ if menu == "사진 업로드":
                     service.files().create(body=metadata, media_body=media).execute()
                     progress_bar.progress((idx + 1) / len(files))
                 except Exception as e:
-                    st.error(f"{f.name} 업로드 실패: {e}")
-            st.success(f"{len(files)}장의 사진이 교사용 드라이브에 저장되었습니다!")
+                    st.error(f"{f.name} 업로드 중 오류 발생: {e}")
+            st.success(f"{len(files)}장의 사진이 성공적으로 저장되었습니다!")
         else:
             st.warning("먼저 사진을 선택해주세요.")
 
@@ -59,7 +67,7 @@ elif menu == "공동 라벨링":
     st.header("🏷️ 데이터 라벨링 (YOLO)")
     
     try:
-        # 폴더 내 이미지 파일 목록 가져오기
+        # 드라이브에서 이미지 파일 목록 가져오기
         results = service.files().list(
             q=f"'{PARENT_FOLDER_ID}' in parents and mimeType contains 'image/'",
             fields="files(id, name)").execute()
@@ -69,14 +77,14 @@ elif menu == "공동 라벨링":
             target_name = st.selectbox("라벨링할 사진 선택", [i['name'] for i in items])
             target_id = [i['id'] for i in items if i['name'] == target_name][0]
 
-            # 이미지 다운로드 및 열기
+            # 이미지 다운로드 및 로드
             req = service.files().get_media(fileId=target_id)
             img = Image.open(io.BytesIO(req.execute()))
             
-            st.write(f"현재 사진: {target_name}")
-            st.write("박스를 그려 사물의 위치를 알려주세요.")
+            st.write(f"선택된 사진: {target_name}")
+            st.caption("박스를 그려 사물의 위치를 알려주세요.")
             
-            # 라벨링 캔버스
+            # 라벨링 캔버스 설정
             canvas_result = st_canvas(
                 fill_color="rgba(255, 165, 0, 0.3)",
                 stroke_width=2,
@@ -98,7 +106,7 @@ elif menu == "공동 라벨링":
                         h = obj['height'] / img.height
                         yolo_data.append(f"0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
                     
-                    # .txt 파일로 드라이브에 저장
+                    # .txt 파일 생성 및 드라이브 저장
                     txt_name = target_name.rsplit('.', 1)[0] + ".txt"
                     txt_content = "\n".join(yolo_data).encode()
                     media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
@@ -106,7 +114,9 @@ elif menu == "공동 라벨링":
                         body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, 
                         media_body=media
                     ).execute()
-                    st.success(f"{txt_name} 라벨 데이터가 저장되었습니다!")
+                    st.success(f"'{txt_name}' 라벨링 데이터가 드라이브에 저장되었습니다!")
+                else:
+                    st.warning("먼저 박스를 그려주세요.")
         else:
             st.write("업로드된 사진이 없습니다.")
     except Exception as e:
