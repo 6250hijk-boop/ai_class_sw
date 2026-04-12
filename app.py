@@ -11,20 +11,20 @@ import re
 import cv2
 import numpy as np
 
-# YOLO 라이브러리
+# YOLO 라이브러리 로드
 try:
     from ultralytics import YOLO
 except ImportError:
     YOLO = None
 
-# [성능 최적화] 모델 로드 캐싱
+# [성능 최적화] 모델을 메모리에 한 번만 로드
 @st.cache_resource
 def load_yolo_model(model_path):
     if os.path.exists(model_path):
         return YOLO(model_path)
     return None
 
-# 구글 드라이브 서비스 연결 함수
+# 구글 드라이브 서비스 연결
 def get_drive_service():
     if "google_oauth" in st.secrets:
         creds = Credentials(token=None, refresh_token=st.secrets["google_oauth"]["refresh_token"],
@@ -32,13 +32,14 @@ def get_drive_service():
                             client_id=st.secrets["google_oauth"]["client_id"],
                             client_secret=st.secrets["google_oauth"]["client_secret"],
                             scopes=['https://www.googleapis.com/auth/drive'])
-    if not creds.valid:
-        creds.refresh(Request())
-    return build('drive', 'v3', credentials=creds)
+        if not creds.valid: creds.refresh(Request())
+        return build('drive', 'v3', credentials=creds)
+    else:
+        st.error("Secrets 설정이 필요합니다.")
+        st.stop()
 
 service = get_drive_service()
-# 선생님의 'train' 폴더 ID
-PARENT_FOLDER_ID = "1VO3EIJ7lFLOo85dSngpDdzbaGRhZ0RUw"
+PARENT_FOLDER_ID = "1VO3EIJ7lFLOo85dSngpDdzbaGRhZ0RUw" # 선생님의 train 폴더
 
 def get_next_data_index():
     try:
@@ -48,6 +49,7 @@ def get_next_data_index():
         return max(indices) + 1 if indices else 1
     except: return 1
 
+# 라벨 확인용 박스 그리기
 def draw_yolo_boxes(image, yolo_lines, labels, color="#e6a500"):
     draw = ImageDraw.Draw(image)
     w_img, h_img = image.size
@@ -74,9 +76,9 @@ st.sidebar.title("🚀 AI 데이터 센터")
 MENU_1, MENU_2, MENU_3 = "1. 사진 업로드 (640x640)", "2. 클릭 방식 라벨링", "3. AI 모델 분석 (정확도 표시)"
 menu = st.sidebar.radio("메뉴 선택", [MENU_1, MENU_2, MENU_3])
 
-# --- 1. 사진 업로드 ---
+# --- 1. 사진 업로드 (규격화) ---
 if menu == MENU_1:
-    st.header("📸 학습 데이터 규격화 업로드")
+    st.header("📸 학습 데이터 업로드 (640x640 자동변환)")
     files = st.file_uploader("사진 선택", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
     if st.button("드라이브 전송") and files:
         idx = get_next_data_index()
@@ -86,9 +88,9 @@ if menu == MENU_1:
             img.save(buf, format="JPEG", quality=95)
             service.files().create(body={'name': f"data{idx}.jpg", 'parents': [PARENT_FOLDER_ID]}, media_body=MediaInMemoryUpload(buf.getvalue(), mimetype='image/jpeg')).execute()
             idx += 1
-        st.success("🎉 640x640 변환 및 업로드 완료!")
+        st.success("🎉 모든 사진이 640x640 크기로 변환되어 저장되었습니다!")
 
-# --- 2. 데이터 라벨링 ---
+# --- 2. 데이터 라벨링 (클릭 방식) ---
 elif menu == MENU_2:
     st.header("🏷️ 데이터 라벨링 (클릭 방식)")
     with st.sidebar.expander("📝 라벨 관리", expanded=True):
@@ -100,9 +102,9 @@ elif menu == MENU_2:
     query = f"'{PARENT_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false"
     items = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
     if items:
-        target = st.selectbox("라벨링할 사진 선택", [i['name'] for i in items])
+        target = st.selectbox("사진 선택", [i['name'] for i in items])
         tid = [i['id'] for i in items if i['name'] == target][0]
-        if st.button("사진 불러오기"):
+        if st.button("📥 사진 불러오기"):
             st.session_state.temp_boxes, st.session_state.click_coords = [], []
             img_data = service.files().get_media(fileId=tid).execute()
             st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
@@ -130,29 +132,29 @@ elif menu == MENU_2:
                     service.files().create(body={'name': target.rsplit('.', 1)[0]+".txt", 'parents': [PARENT_FOLDER_ID]}, media_body=MediaInMemoryUpload("\n".join(st.session_state.temp_boxes).encode(), mimetype='text/plain')).execute()
                     st.success("✅ 저장 완료!")
 
-# --- 3. AI 모델 분석 (검출력 및 색상 강화) ---
+# --- 3. AI 모델 분석 (검출력 및 색상 해결) ---
 elif menu == MENU_3:
-    st.header("🔍 AI 사물 분석 및 정확도 확인")
+    st.header("🔍 AI 사과 분석 및 정확도 확인")
     model = load_yolo_model("best.pt")
     
     if model is None:
-        st.warning("⚠️ GitHub에 'best.pt' 파일을 업로드해주세요.")
+        st.warning("⚠️ GitHub에 'best.pt' 파일을 먼저 업로드해주세요.")
     else:
         test_file = st.file_uploader("분석할 사진 선택", type=['jpg', 'jpeg', 'png'])
         if test_file:
             img_pil = Image.open(test_file).convert("RGB")
             if st.button("🚀 분석 실행"):
                 with st.spinner("AI가 꼼꼼하게 분석 중입니다..."):
-                    # [해결 1] 사진을 640x640으로 리사이징하여 모델에게 전달
+                    # [핵심] 사진을 640x640으로 맞춰서 AI에게 전달 (학습 규격과 일치)
                     img_input = img_pil.resize((640, 640))
-                    # [해결 2] 검출 기준치 하향(conf=0.20)으로 검출 확률 업!
-                    results = model(img_input, conf=0.20)
+                    # [핵심] 검출 기준(conf)을 0.15로 대폭 하향하여 작은 가능성도 표시
+                    results = model(img_input, conf=0.15)
                     res = results[0]
                     
                     col1, col2 = st.columns([2, 1])
                     with col1:
                         st.subheader("🖼️ 분석 결과 이미지")
-                        # [해결 3] BGR -> RGB 색상 반전 해결 (cv2 사용)
+                        # [핵심] BGR -> RGB 색상 교정 (보라색 사과 방지)
                         res_plotted = res.plot()
                         res_rgb = cv2.cvtColor(res_plotted, cv2.COLOR_BGR2RGB)
                         st.image(res_rgb, use_column_width=True)
@@ -166,5 +168,4 @@ elif menu == MENU_3:
                                 st.info(f"**[{i+1}] {label}**: {conf:.1f}%")
                                 st.progress(conf / 100)
                         else:
-                            st.error("앗! 사물을 찾지 못했습니다.")
-                            st.info("💡 **팁:** 더 많은 사진을 학습시키거나, 코랩에서 Epochs를 높여보세요.")
+                            st.error("사물을 찾지 못했습니다. 학습 데이터 양을 늘리거나 코랩에서 더 오래 학습시켜보세요.")
