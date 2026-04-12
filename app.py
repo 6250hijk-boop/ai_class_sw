@@ -79,8 +79,8 @@ if "labels" not in st.session_state:
     st.session_state.labels = ["Object"]
 if "loaded_image_id" not in st.session_state:
     st.session_state.loaded_image_id = None
-if "loaded_image_pil" not in st.session_state:
-    st.session_state.loaded_image_pil = None
+if "bg_image_path" not in st.session_state:
+    st.session_state.bg_image_path = None
 if "yolo_lines" not in st.session_state:
     st.session_state.yolo_lines = None
 
@@ -133,27 +133,36 @@ elif menu == "2. 데이터 라벨링 (정답지)":
 
             if st.button("📥 사진 불러오기"):
                 st.session_state.yolo_lines = None
-                with st.spinner("가져오는 중..."):
+                with st.spinner("사진을 캔버스에 준비 중입니다..."):
                     req = service.files().get_media(fileId=target_id)
                     original_img = Image.open(io.BytesIO(req.execute())).convert("RGB")
+                    
                     width = 800
                     height = int(original_img.height * (width / original_img.width))
                     img_resized = original_img.resize((width, height))
-                    clean_canvas = Image.new("RGB", (width, height), (255, 255, 255))
-                    clean_canvas.paste(img_resized, (0, 0))
+                    
+                    # [해결 핵심] 메모리가 아닌 실제 파일(PNG)로 무조건 임시 저장합니다.
+                    temp_path = "current_canvas_bg.png"
+                    img_resized.save(temp_path, format="PNG")
+                    
                     st.session_state.loaded_image_id = target_id
-                    st.session_state.loaded_image_pil = clean_canvas
+                    st.session_state.bg_image_path = temp_path
 
-            if st.session_state.loaded_image_id == target_id and st.session_state.loaded_image_pil is not None:
+            # 파일이 정상적으로 저장되었는지 확인 후 캔버스 실행
+            if st.session_state.loaded_image_id == target_id and st.session_state.bg_image_path and os.path.exists(st.session_state.bg_image_path):
                 st.markdown("---")
-                st.write(f"✍️ **캔버스 (현재 선택: {selected_label})**")
+                
+                # 방금 저장한 실제 파일을 읽어서 캔버스에 즉시 투입!
+                bg_img_for_canvas = Image.open(st.session_state.bg_image_path)
+                
+                st.write(f"✍️ **캔버스 (현재 라벨: {selected_label})** - 사진 위에 박스를 그려주세요!")
                 canvas_result = st_canvas(
                     fill_color="rgba(255, 165, 0, 0.3)",
                     stroke_width=2,
                     stroke_color="#e6a500",
-                    background_image=st.session_state.loaded_image_pil,
-                    height=st.session_state.loaded_image_pil.height,
-                    width=st.session_state.loaded_image_pil.width,
+                    background_image=bg_img_for_canvas,
+                    height=bg_img_for_canvas.height,
+                    width=bg_img_for_canvas.width,
                     drawing_mode="rect",
                     key=f"canvas_{target_id}",
                 )
@@ -161,8 +170,9 @@ elif menu == "2. 데이터 라벨링 (정답지)":
                 if st.button("💾 라벨 데이터(TXT) 저장 및 확인"):
                     if canvas_result.json_data and canvas_result.json_data["objects"]:
                         yolo_lines = []
-                        w_canvas = st.session_state.loaded_image_pil.width
-                        h_canvas = st.session_state.loaded_image_pil.height
+                        w_canvas = bg_img_for_canvas.width
+                        h_canvas = bg_img_for_canvas.height
+                        
                         for obj in canvas_result.json_data["objects"]:
                             cx = (obj['left'] + obj['width']/2) / w_canvas
                             cy = (obj['top'] + obj['height']/2) / h_canvas
@@ -180,10 +190,11 @@ elif menu == "2. 데이터 라벨링 (정답지)":
                     else:
                         st.warning("박스를 그려주세요.")
             
-            if st.session_state.yolo_lines is not None:
+            # 최종 확인창
+            if st.session_state.yolo_lines is not None and st.session_state.bg_image_path:
                 st.markdown("---")
                 st.write("✅ **최종 라벨링 결과 확인**")
-                original_image_copy = st.session_state.loaded_image_pil.copy()
+                original_image_copy = Image.open(st.session_state.bg_image_path).copy()
                 labeled_image = draw_yolo_boxes(original_image_copy, st.session_state.yolo_lines, st.session_state.labels)
                 st.image(labeled_image, use_column_width=True)
 
@@ -201,15 +212,15 @@ elif menu == "3. AI 모델 분석 (YOLOv8)":
         st.error("YOLO 라이브러리가 설치되지 않았습니다. `requirements.txt`에 `ultralytics`를 추가해 주세요.")
         st.stop()
 
-    model_path = "best.pt"  # 깃허브에 올라갈 뇌 파일 이름
+    model_path = "best.pt"  
     
     if not os.path.exists(model_path):
         st.warning("⚠️ 아직 인공지능 뇌 파일(`best.pt`)이 없습니다!")
         st.info("""
         **다음 단계 안내:**
-        1. 모아둔 사진과 TXT 파일을 구글 코랩으로 가져가 YOLOv8 모델을 학습시킵니다.
+        1. 2번 메뉴에서 라벨링을 마친 사진과 TXT 파일을 구글 코랩으로 가져가 YOLOv8 모델을 학습시킵니다.
         2. 학습이 끝나면 만들어지는 `best.pt` 파일을 다운로드합니다.
-        3. 선생님의 GitHub 저장소(`jths-ai-edu/main`)에 `best.pt` 파일을 업로드하세요.
+        3. 선생님의 GitHub 저장소에 `best.pt` 파일을 업로드하세요.
         4. 업로드 후 이 화면으로 오면 실제 분석이 가능해집니다!
         """)
     else:
@@ -223,6 +234,6 @@ elif menu == "3. AI 모델 분석 (YOLOv8)":
             
             if st.button("AI 자동 분석 실행"):
                 with st.spinner("AI가 사진을 분석하고 있습니다..."):
-                    results = model(img)  # YOLO 분석 실행
-                    res_img = results[0].plot()  # 결과가 그려진 이미지 생성
+                    results = model(img)  
+                    res_img = results[0].plot()  
                     st.image(res_img, caption="분석 완료!", use_column_width=True)
