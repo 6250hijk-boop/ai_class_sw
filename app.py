@@ -45,14 +45,13 @@ if menu == "사진 업로드":
                 media = MediaInMemoryUpload(f.getvalue(), mimetype='image/jpeg')
                 service.files().create(body=metadata, media_body=media).execute()
                 progress_bar.progress((idx + 1) / len(files))
-            st.success(f"{len(files)}장의 사진이 저장되었습니다! '공동 라벨링' 메뉴로 이동하세요.")
+            st.success(f"{len(files)}장의 사진이 저장되었습니다!")
         else:
             st.warning("사진을 선택해주세요.")
 
 elif menu == "공동 라벨링":
     st.header("🏷️ 데이터 라벨링 (YOLO)")
     
-    # 1. 파일 목록 새로고침 버튼 추가
     if st.button("🔄 사진 목록 새로고침"):
         st.rerun()
 
@@ -69,52 +68,60 @@ elif menu == "공동 라벨링":
             target_name = st.selectbox("라벨링할 사진 선택", file_names)
             target_id = [i['id'] for i in items if i['name'] == target_name][0]
 
-            # 2. 이미지 다운로드 및 크기 최적화 (라벨링 성능 향상)
-            req = service.files().get_media(fileId=target_id)
-            original_img = Image.open(io.BytesIO(req.execute()))
-            
-            # 너무 큰 이미지는 브라우저에서 느려지므로 가로 800px로 리사이징하여 보여줌
-            display_width = 800
-            ratio = display_width / original_img.width
-            display_height = int(original_img.height * ratio)
-            img_resized = original_img.resize((display_width, display_height))
-            
-            st.write(f"현재 선택된 사진: {target_name}")
-            
-            # 3. 캔버스 설정
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 165, 0, 0.3)",
-                stroke_width=2,
-                stroke_color="#e6a500",
-                background_image=img_resized,
-                height=display_height,
-                width=display_width,
-                drawing_mode="rect",
-                key="canvas",
-            )
+            # --- 이미지 불러오기 보강 ---
+            try:
+                # 드라이브에서 데이터 다운로드
+                req = service.files().get_media(fileId=target_id)
+                img_data = req.execute()
+                original_img = Image.open(io.BytesIO(img_data)).convert("RGB") # 형식 강제 변환
+                
+                # 이미지 크기 조절
+                display_width = 800
+                ratio = display_width / original_img.width
+                display_height = int(original_img.height * ratio)
+                img_resized = original_img.resize((display_width, display_height))
+                
+                # [진단용] 이미지가 잘 불러와졌는지 캔버스 위에 작게 먼저 보여줌
+                st.image(img_resized, caption=f"불러오기 완료: {target_name}", width=300)
+                
+                st.write("▼ 사진 위에 박스를 그려주세요")
+                
+                # 캔버스 설정 (key를 이미지 ID와 연동하여 사진 바뀔 때마다 캔버스 강제 리셋)
+                canvas_result = st_canvas(
+                    fill_color="rgba(255, 165, 0, 0.3)",
+                    stroke_width=2,
+                    stroke_color="#e6a500",
+                    background_image=img_resized,
+                    height=display_height,
+                    width=display_width,
+                    drawing_mode="rect",
+                    key=f"canvas_{target_id}", # 파일마다 고유 키 부여 (중요!)
+                )
 
-            if st.button("라벨 저장"):
-                if canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
-                    yolo_data = []
-                    for obj in canvas_result.json_data["objects"]:
-                        # 리사이징된 좌표를 원래 이미지 비율에 맞춰 YOLO 포맷으로 변환
-                        cx = (obj['left'] + obj['width']/2) / display_width
-                        cy = (obj['top'] + obj['height']/2) / display_height
-                        w = obj['width'] / display_width
-                        h = obj['height'] / display_height
-                        yolo_data.append(f"0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
-                    
-                    txt_name = target_name.rsplit('.', 1)[0] + ".txt"
-                    txt_content = "\n".join(yolo_data).encode()
-                    media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
-                    service.files().create(
-                        body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, 
-                        media_body=media
-                    ).execute()
-                    st.success(f"'{txt_name}' 저장 완료! 드라이브를 확인하세요.")
-                else:
-                    st.warning("사진 위에 박스를 먼저 그려주세요.")
+                if st.button("라벨 저장"):
+                    if canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
+                        yolo_data = []
+                        for obj in canvas_result.json_data["objects"]:
+                            cx = (obj['left'] + obj['width']/2) / display_width
+                            cy = (obj['top'] + obj['height']/2) / display_height
+                            w = obj['width'] / display_width
+                            h = obj['height'] / display_height
+                            yolo_data.append(f"0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+                        
+                        txt_name = target_name.rsplit('.', 1)[0] + ".txt"
+                        txt_content = "\n".join(yolo_data).encode()
+                        media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
+                        service.files().create(
+                            body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, 
+                            media_body=media
+                        ).execute()
+                        st.success(f"'{txt_name}' 저장 완료!")
+                    else:
+                        st.warning("먼저 박스를 그려주세요.")
+            except Exception as img_err:
+                st.error(f"이미지를 처리하는 중 오류가 발생했습니다: {img_err}")
+                
         else:
-            st.info("드라이브에 업로드된 사진이 없습니다. 사진을 먼저 업로드해 주세요.")
+            st.info("드라이브에 사진이 없습니다.")
     except Exception as e:
-        st.error(f"오류 발생: {e}")
+        st.error(f"목록을 가져오는 중 오류 발생: {e}")
