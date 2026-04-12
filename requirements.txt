@@ -1,6 +1,6 @@
 streamlit
 streamlit-drawable-canvas
 Pillow
-google-api-python-client
-google-auth-httplib2
+google-auth
 google-auth-oauthlib
+google-api-python-client
