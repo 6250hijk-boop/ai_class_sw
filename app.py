@@ -19,238 +19,146 @@ except ImportError:
 def get_drive_service():
     if "google_oauth" in st.secrets:
         oauth_info = st.secrets["google_oauth"]
-        creds = Credentials(
-            token=None,
-            refresh_token=oauth_info["refresh_token"],
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=oauth_info["client_id"],
-            client_secret=oauth_info["client_secret"],
-            scopes=['https://www.googleapis.com/auth/drive']
-        )
-        if not creds.valid:
-            creds.refresh(Request())
+        creds = Credentials(token=None, refresh_token=st.secrets["google_oauth"]["refresh_token"],
+                            token_uri="https://oauth2.googleapis.com/token",
+                            client_id=st.secrets["google_oauth"]["client_id"],
+                            client_secret=st.secrets["google_oauth"]["client_secret"],
+                            scopes=['https://www.googleapis.com/auth/drive'])
+        if not creds.valid: creds.refresh(Request())
         return build('drive', 'v3', credentials=creds)
     else:
-        st.error("Secrets 설정이 되지 않았습니다.")
+        st.error("Secrets 설정이 필요합니다.")
         st.stop()
 
 service = get_drive_service()
-PARENT_FOLDER_ID = "1VO3EIJ7lFLOo85dSngpDdzbaGRhZ0RUw" # train 폴더
+PARENT_FOLDER_ID = "1VO3EIJ7lFLOo85dSngpDdzbaGRhZ0RUw"
 
 def get_next_data_index():
     try:
-        query = f"'{PARENT_FOLDER_ID}' in parents and name contains 'data' and trashed = false"
-        results = service.files().list(q=query, fields="files(name)").execute()
+        results = service.files().list(q=f"'{PARENT_FOLDER_ID}' in parents and name contains 'data' and trashed = false", fields="files(name)").execute()
         files = results.get('files', [])
-        max_idx = 0
-        for f in files:
-            match = re.search(r'data(\d+)', f['name'])
-            if match:
-                idx = int(match.group(1))
-                if idx > max_idx:
-                    max_idx = idx
-        return max_idx + 1
-    except:
-        return 1
+        indices = [int(re.search(r'data(\d+)', f['name']).group(1)) for f in files if re.search(r'data(\d+)', f['name'])]
+        return max(indices) + 1 if indices else 1
+    except: return 1
 
 def draw_yolo_boxes(image, yolo_lines, labels, color="#e6a500"):
     draw = ImageDraw.Draw(image)
-    width, height = image.size
+    w_img, h_img = image.size
     for line in yolo_lines:
         try:
-            class_id, cx, cy, w, h = map(float, line.split())
-            left = (cx - w/2) * width
-            top = (cy - h/2) * height
-            right = (cx + w/2) * width
-            bottom = (cy + h/2) * height
-            draw.rectangle([left, top, right, bottom], outline=color, width=3)
-            class_name = labels[int(class_id)]
-            draw.text((left, top - 15), class_name, fill=color)
-        except:
-            continue
+            cid, cx, cy, w, h = map(float, line.split())
+            l, t = (cx - w/2) * w_img, (cy - h/2) * h_img
+            r, b = (cx + w/2) * w_img, (cy + h/2) * h_img
+            draw.rectangle([l, t, r, b], outline=color, width=3)
+            draw.text((l, t - 15), labels[int(cid)], fill=color)
+        except: continue
     return image
 
 st.set_page_config(page_title="YOLOv8 실습 관리자", layout="wide")
 
-# 세션 상태 초기화
-if "labels" not in st.session_state:
-    st.session_state.labels = ["Object"]
-if "loaded_image_id" not in st.session_state:
-    st.session_state.loaded_image_id = None
-if "loaded_image_pil" not in st.session_state:
-    st.session_state.loaded_image_pil = None
-if "click_coords" not in st.session_state:
-    st.session_state.click_coords = [] # 클릭 좌표 임시 저장
-if "last_point" not in st.session_state:
-    st.session_state.last_point = None
-if "temp_boxes" not in st.session_state:
-    st.session_state.temp_boxes = [] # 화면에 보일 임시 박스들
+if "labels" not in st.session_state: st.session_state.labels = ["Object"]
+if "loaded_image_id" not in st.session_state: st.session_state.loaded_image_id = None
+if "loaded_image_pil" not in st.session_state: st.session_state.loaded_image_pil = None
+if "click_coords" not in st.session_state: st.session_state.click_coords = []
+if "temp_boxes" not in st.session_state: st.session_state.temp_boxes = []
 
 st.sidebar.title("🚀 AI 데이터 센터")
-menu = st.sidebar.radio("메뉴 선택", ["1. 사진 업로드 (640x640)", "2. 클릭 방식 라벨링 (YOLO)", "3. AI 모델 분석"])
+menu = st.sidebar.radio("메뉴 선택", ["1. 사진 업로드 (640x640)", "2. 클릭 방식 라벨링", "3. AI 모델 분석 (정확도 표시)"])
 
-# --- 1. 데이터 수집 (640x640) ---
+# --- 1. 사진 업로드 ---
 if menu == "1. 사진 업로드 (640x640)":
-    st.header("📸 학습 데이터 규격화 업로드")
-    st.info("올리시는 모든 사진은 인공지능 학습 표준인 640x640 크기로 변환되어 드라이브에 저장됩니다.")
-    
+    st.header("📸 학습 데이터 업로드")
     files = st.file_uploader("사진 선택", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
-    if st.button("드라이브로 전송 시작"):
-        if files:
-            current_idx = get_next_data_index()
-            progress_bar = st.progress(0)
-            for i, f in enumerate(files):
-                img = Image.open(f).convert("RGB")
-                img_resized = img.resize((640, 640), Image.Resampling.LANCZOS)
-                
-                buf = io.BytesIO()
-                img_resized.save(buf, format="JPEG", quality=95)
-                byte_im = buf.getvalue()
-                
-                new_name = f"data{current_idx}.jpg"
-                metadata = {'name': new_name, 'parents': [PARENT_FOLDER_ID]}
-                media = MediaInMemoryUpload(byte_im, mimetype='image/jpeg')
-                service.files().create(body=metadata, media_body=media).execute()
-                
-                current_idx += 1
-                progress_bar.progress((i + 1) / len(files))
-            st.success("🎉 모든 사진이 640x640 크기로 변환되어 저장되었습니다.")
-        else:
-            st.warning("사진을 첨부해주세요.")
+    if st.button("드라이브 전송") and files:
+        idx = get_next_data_index()
+        for f in files:
+            img = Image.open(f).convert("RGB").resize((640, 640), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=95)
+            service.files().create(body={'name': f"data{idx}.jpg", 'parents': [PARENT_FOLDER_ID]}, media_body=MediaInMemoryUpload(buf.getvalue(), mimetype='image/jpeg')).execute()
+            idx += 1
+        st.success("업로드 완료!")
 
-# --- 2. 데이터 라벨링 (클릭 & 임시저장 방식) ---
-elif menu == "2. 클릭 방식 라벨링 (YOLO)":
-    st.header("🏷️ 클릭 방식 데이터 라벨링")
-    st.info("대상의 **왼쪽 위 모서리**와 **오른쪽 아래 모서리**를 차례로 클릭하면 사각형이 완성됩니다.")
+# --- 2. 라벨링 ---
+elif menu == "2. 클릭 방식 라벨링":
+    st.header("🏷️ 데이터 라벨링")
+    with st.sidebar.expander("📝 라벨 관리"):
+        new_name = st.text_input("라벨 이름 수정", value=st.session_state.labels[0])
+        if st.button("변경"): st.session_state.labels[0] = new_name; st.rerun()
     
-    with st.sidebar.expander("📝 라벨(클래스) 관리", expanded=True):
-        st.write("현재 라벨 목록:", ", ".join(st.session_state.labels))
-        if len(st.session_state.labels) > 0:
-            current_main_label = st.session_state.labels[0]
-            new_main_name = st.text_input("기본 라벨 이름 수정", value=current_main_label)
-            if st.button("이름 변경 적용"):
-                st.session_state.labels[0] = new_main_name
-                st.rerun()
-        st.markdown("---")
-        add_label = st.text_input("새로운 라벨 추가")
-        if st.button("라벨 추가"):
-            if add_label and add_label not in st.session_state.labels:
-                st.session_state.labels.append(add_label)
-                st.rerun()
+    query = f"'{PARENT_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false"
+    items = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
+    if items:
+        target = st.selectbox("사진 선택", [i['name'] for i in items])
+        tid = [i['id'] for i in items if i['name'] == target][0]
+        if st.button("사진 로드"):
+            st.session_state.temp_boxes = []
+            st.session_state.click_coords = []
+            img_data = service.files().get_media(fileId=tid).execute()
+            st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
+            st.session_state.loaded_image_id = tid
+        
+        if st.session_state.loaded_image_id == tid:
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                img_draw = st.session_state.loaded_image_pil.copy()
+                if st.session_state.temp_boxes: draw_yolo_boxes(img_draw, st.session_state.temp_boxes, st.session_state.labels)
+                draw = ImageDraw.Draw(img_draw)
+                for p in st.session_state.click_coords: draw.ellipse((p[0]-4, p[1]-4, p[0]+4, p[1]+4), fill="red")
+                val = streamlit_image_coordinates(img_draw, key="label_click")
+                if val and (val["x"], val["y"]) not in st.session_state.click_coords:
+                    st.session_state.click_coords.append((val["x"], val["y"]))
+                    if len(st.session_state.click_coords) == 2:
+                        c = st.session_state.click_coords
+                        l, r, t, b = min(c[0][0], c[1][0]), max(c[0][0], c[1][0]), min(c[0][1], c[1][1]), max(c[0][1], c[1][1])
+                        st.session_state.temp_boxes.append(f"0 {(l+r)/1280:.6f} {(t+b)/1280:.6f} {(r-l)/640:.6f} {(b-t)/640:.6f}")
+                        st.session_state.click_coords = []
+                    st.rerun()
+            with col2:
+                if st.button("💾 드라이브 전송"):
+                    service.files().create(body={'name': target.rsplit('.', 1)[0]+".txt", 'parents': [PARENT_FOLDER_ID]}, media_body=MediaInMemoryUpload("\n".join(st.session_state.temp_boxes).encode(), mimetype='text/plain')).execute()
+                    st.success("저장 완료!")
 
-    try:
-        query = f"'{PARENT_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false"
-        results = service.files().list(q=query, fields="files(id, name)").execute()
-        items = results.get('files', [])
-
-        if items:
-            file_names = [i['name'] for i in items]
-            target_name = st.selectbox("라벨링할 사진 선택", file_names)
-            target_id = [i['id'] for i in items if i['name'] == target_name][0]
-            selected_label = st.selectbox("현재 찍을 라벨 선택", st.session_state.labels)
-            label_idx = st.session_state.labels.index(selected_label)
-
-            if st.button("📥 사진 불러오기 및 초기화"):
-                st.session_state.click_coords = []
-                st.session_state.last_point = None
-                st.session_state.temp_boxes = [] 
-                with st.spinner("이미지 불러오는 중..."):
-                    req = service.files().get_media(fileId=target_id)
-                    original_img = Image.open(io.BytesIO(req.execute())).convert("RGB")
-                    
-                    # 640x640 이미지를 1:1로 띄웁니다
-                    img_display = original_img.resize((640, 640))
-                    
-                    st.session_state.loaded_image_id = target_id
-                    st.session_state.loaded_image_pil = img_display
-
-            if st.session_state.loaded_image_id == target_id and st.session_state.loaded_image_pil is not None:
-                st.markdown("---")
-                col1, col2 = st.columns([2, 1])
-                
-                with col1:
-                    img_data = st.session_state.loaded_image_pil
-                    img_to_draw = img_data.copy()
-                    draw = ImageDraw.Draw(img_to_draw)
-                    
-                    # 1. 완성된 임시 박스 그리기
-                    if st.session_state.temp_boxes:
-                         img_to_draw = draw_yolo_boxes(img_to_draw, st.session_state.temp_boxes, st.session_state.labels)
-                    
-                    # 2. 지금 찍고 있는 점 그리기
-                    for p in st.session_state.click_coords:
-                        r = 4 
-                        draw.ellipse((p[0]-r, p[1]-r, p[0]+r, p[1]+r), fill="red")
-
-                    # 클릭 도구 출력 (블랙스크린 없음)
-                    value = streamlit_image_coordinates(img_to_draw, key=f"img_{target_id}_{len(st.session_state.temp_boxes)}_{len(st.session_state.click_coords)}")
-
-                    # 클릭 감지 및 로직 처리
-                    if value is not None:
-                        point = (value["x"], value["y"])
-                        if point != st.session_state.last_point:
-                            st.session_state.click_coords.append(point)
-                            st.session_state.last_point = point
-                            
-                            # 점이 2개가 되면 즉시 사각형으로 변환하여 임시 저장소에 넣음
-                            if len(st.session_state.click_coords) == 2:
-                                x1, y1 = st.session_state.click_coords[0]
-                                x2, y2 = st.session_state.click_coords[1]
-                                left, right = min(x1, x2), max(x1, x2)
-                                top, bottom = min(y1, y2), max(y1, y2)
-                                
-                                cx = (left + right) / 2 / 640
-                                cy = (top + bottom) / 2 / 640
-                                w = (right - left) / 640
-                                h = (bottom - top) / 640
-                                
-                                yolo_format = f"{label_idx} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}"
-                                st.session_state.temp_boxes.append(yolo_format)
-                                
-                                # 점 초기화
-                                st.session_state.click_coords = []
-                                st.session_state.last_point = None
-                            
-                            st.rerun()
-
-                with col2:
-                    st.write("📊 **라벨링 관리**")
-                    st.write(f"현재 찍힌 임시 사각형: **{len(st.session_state.temp_boxes)}** 개")
-                    
-                    if st.button("🔙 방금 친 박스 취소"):
-                        if st.session_state.temp_boxes:
-                            st.session_state.temp_boxes.pop()
-                            st.session_state.click_coords = []
-                            st.session_state.last_point = None
-                            st.rerun()
-                            
-                    st.markdown("---")
-                    st.write("🚀 **최종 구글 드라이브 전송**")
-                    
-                    if len(st.session_state.temp_boxes) > 0:
-                        if st.button("💾 모든 임시 박스(TXT) 최종 전송", type="primary"):
-                            txt_content = "\n".join(st.session_state.temp_boxes).encode()
-                            txt_name = target_name.rsplit('.', 1)[0] + ".txt"
-                            media = MediaInMemoryUpload(txt_content, mimetype='text/plain')
-                            
-                            service.files().create(body={'name': txt_name, 'parents': [PARENT_FOLDER_ID]}, media_body=media).execute()
-                            
-                            st.success(f"🎉 성공! '{txt_name}' 정답지가 드라이브에 저장되었습니다.")
-        else:
-            st.info("드라이브에 사진이 없습니다.")
-    except Exception as e:
-        st.error(f"오류: {e}")
-
-# --- 3. 모델 분석 ---
+# --- 3. AI 모델 분석 (업그레이드) ---
 elif menu == "3. AI 모델 분석":
-    st.header("🔍 학습된 인공지능 분석")
+    st.header("🔍 AI 사물 분석 및 정확도 확인")
     model_path = "best.pt"
-    if os.path.exists(model_path):
+    
+    if not os.path.exists(model_path):
+        st.warning("⚠️ GitHub에 best.pt 파일을 먼저 업로드해주세요.")
+    else:
         model = YOLO(model_path)
         test_file = st.file_uploader("분석할 사진 선택", type=['jpg', 'jpeg', 'png'])
-        if test_file and st.button("분석 실행"):
+        
+        if test_file:
             img = Image.open(test_file).convert("RGB")
-            results = model(img)
-            st.image(results[0].plot(), caption="분석 결과", use_column_width=True)
-    else:
-        st.warning("아직 학습된 모델(best.pt)이 없습니다. 코랩에서 학습 후 올려주세요.")
+            
+            if st.button("🚀 분석 실행"):
+                with st.spinner("AI가 분석 중입니다..."):
+                    results = model(img)
+                    res = results[0]
+                    
+                    # 화면 분할: 결과 이미지와 수치 결과
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.subheader("🖼️ 분석 결과 이미지")
+                        # AI가 그린 박스가 포함된 이미지 출력
+                        st.image(res.plot(), use_column_width=True)
+                    
+                    with col2:
+                        st.subheader("📊 검출 데이터")
+                        if len(res.boxes) > 0:
+                            st.write(f"총 **{len(res.boxes)}개**의 사물을 찾았습니다.")
+                            
+                            # 각 검출 결과에 대해 이름과 정확도(Confidence) 추출
+                            for i, box in enumerate(res.boxes):
+                                cls_id = int(box.cls[0])
+                                label = model.names[cls_id]
+                                conf = float(box.conf[0]) * 100 # 확률을 %로 변환
+                                
+                                # 깔끔한 카드 형태로 출력
+                                st.info(f"**[{i+1}] {label}**\n\n정확도: **{conf:.1f}%**")
+                                st.progress(conf / 100) # 시각적인 바 표시
+                        else:
+                            st.error("검출된 사물이 없습니다. 다른 사진으로 시도해보세요.")
