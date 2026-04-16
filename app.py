@@ -8,8 +8,6 @@ from googleapiclient.http import MediaInMemoryUpload
 import io
 import os
 import re
-import cv2
-import numpy as np
 
 # YOLO 라이브러리 로드
 try:
@@ -39,21 +37,14 @@ def get_drive_service():
 service = get_drive_service()
 PARENT_FOLDER_ID = "1VO3EIJ7lFLOo85dSngpDdzbaGRhZ0RUw"
 
-# [핵심] 기존에 같은 이름의 파일이 있으면 삭제하고 새로 저장하는 함수
 def save_txt_to_drive_overwriting(file_name, content):
-    # 1. 기존 파일 검색
     query = f"name = '{file_name}' and '{PARENT_FOLDER_ID}' in parents and trashed = false"
     response = service.files().list(q=query, fields="files(id)").execute()
     files = response.get('files', [])
-
     media = MediaInMemoryUpload(content, mimetype='text/plain')
-
     if files:
-        # 기존 파일이 있으면 삭제하고 새로 생성 (중복 방지)
         for f in files:
             service.files().delete(fileId=f['id']).execute()
-    
-    # 새 파일 생성
     service.files().create(
         body={'name': file_name, 'parents': [PARENT_FOLDER_ID]},
         media_body=media
@@ -93,15 +84,15 @@ if menu == MENU_1:
             idx += 1
         st.success("🎉 업로드 완료!")
 
-# --- 2. 라벨링 (덮어쓰기 적용됨) ---
+# --- 2. 라벨링 ---
 elif menu == MENU_2:
     st.header("🏷️ 데이터 라벨링 (클릭 방식)")
     with st.sidebar.expander("📝 라벨 관리", expanded=True):
         new_name = st.text_input("라벨 이름 수정", value=st.session_state.labels[0])
-        if st.button("이름 변경 적용"): 
+        if st.button("이름 변경 적용"):
             st.session_state.labels[0] = new_name
             st.rerun()
-    
+
     query = f"'{PARENT_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false"
     items = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
     if items:
@@ -112,7 +103,7 @@ elif menu == MENU_2:
             img_data = service.files().get_media(fileId=tid).execute()
             st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
             st.session_state.loaded_image_id = tid
-        
+
         if st.session_state.loaded_image_id == tid:
             col1, col2 = st.columns([2, 1])
             with col1:
@@ -125,7 +116,6 @@ elif menu == MENU_2:
                     if len(st.session_state.click_coords) == 2:
                         c = st.session_state.click_coords
                         l, r, t, b = min(c[0][0], c[1][0]), max(c[0][0], c[1][0]), min(c[0][1], c[1][1]), max(c[0][1], c[1][1])
-                        # 첫번째 라벨(0)로 고정
                         st.session_state.temp_boxes.append(f"0 {(l+r)/1280:.6f} {(t+b)/1280:.6f} {(r-l)/640:.6f} {(b-t)/640:.6f}")
                         st.session_state.click_coords = []
                     st.rerun()
@@ -134,7 +124,6 @@ elif menu == MENU_2:
                 if st.button("💾 드라이브로 TXT 최종 전송", type="primary"):
                     txt_name = target.rsplit('.', 1)[0] + ".txt"
                     txt_content = "\n".join(st.session_state.temp_boxes).encode()
-                    # [수정] 덮어쓰기 함수 호출
                     save_txt_to_drive_overwriting(txt_name, txt_content)
                     st.success("✅ 기존 파일을 지우고 최신 버전으로 저장했습니다!")
 
@@ -156,7 +145,7 @@ elif menu == MENU_3:
                     col1, col2 = st.columns([2, 1])
                     with col1:
                         res_plotted = res.plot()
-                        res_rgb = cv2.cvtColor(res_plotted, cv2.COLOR_BGR2RGB)
+                        res_rgb = res_plotted[..., ::-1]
                         st.image(res_rgb, use_column_width=True)
                     with col2:
                         if len(res.boxes) > 0:
