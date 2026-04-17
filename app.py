@@ -12,23 +12,27 @@ import re
 # YOLO 라이브러리 로드
 try:
     from ultralytics import YOLO
+    YOLO_AVAILABLE = True
 except ImportError:
-    st.error("ultralytics 라이브러리가 설치되지 않았습니다. requirements.txt를 확인하세요.")
     YOLO = None
+    YOLO_AVAILABLE = False
 
 @st.cache_resource
 def load_yolo_model(model_path):
-    # 파일 존재 여부 확인 (GitHub 루트에 있을 경우)
-    if os.path.exists(model_path):
-        try:
-            model = YOLO(model_path)
-            # Streamlit Cloud 등 CPU 환경 배려
-            model.to('cpu')
-            return model
-        except Exception as e:
-            st.error(f"모델 로드 중 오류 발생: {e}")
-            return None
-    return None
+    if not YOLO_AVAILABLE:
+        st.error("❌ ultralytics 라이브러리가 설치되지 않았습니다. requirements.txt를 확인하세요.")
+        return None
+    if not os.path.exists(model_path):
+        st.error(f"❌ 모델 파일을 찾을 수 없습니다: '{model_path}'")
+        st.info(f"📂 현재 경로: `{os.getcwd()}`\n\n📄 파일 목록: `{os.listdir('.')}`")
+        return None
+    try:
+        model = YOLO(model_path)
+        model.to('cpu')
+        return model
+    except Exception as e:
+        st.error(f"❌ 모델 로드 중 오류 발생: {e}")
+        return None
 
 def get_drive_service():
     if "google_oauth" in st.secrets:
@@ -52,24 +56,18 @@ def get_drive_service():
         st.error("Streamlit Secrets에 'google_oauth' 설정이 필요합니다.")
         st.stop()
 
-# 전역 서비스 및 폴더 ID 설정
 service = get_drive_service()
 PARENT_FOLDER_ID = "1VO3EIJ7lFLOo85dSngpDdzbaGRhZ0RUw"
 
 def save_txt_to_drive_overwriting(file_name, content):
-    """기존 파일을 찾아 업데이트하거나 없으면 새로 생성합니다."""
     query = f"name = '{file_name}' and '{PARENT_FOLDER_ID}' in parents and trashed = false"
     response = service.files().list(q=query, fields="files(id)").execute()
     files = response.get('files', [])
-    
     media = MediaInMemoryUpload(content, mimetype='text/plain')
-    
     if files:
-        # 기존 파일이 있으면 업데이트
         file_id = files[0]['id']
         service.files().update(fileId=file_id, media_body=media).execute()
     else:
-        # 없으면 새로 생성
         service.files().create(
             body={'name': file_name, 'parents': [PARENT_FOLDER_ID]},
             media_body=media
@@ -144,11 +142,11 @@ elif menu == MENU_2:
 
     query = f"'{PARENT_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed = false"
     items = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
-    
+
     if items:
         target = st.selectbox("사진 선택", [i['name'] for i in items])
         tid = [i['id'] for i in items if i['name'] == target][0]
-        
+
         if st.button("📥 사진 불러오기"):
             st.session_state.temp_boxes, st.session_state.click_coords = [], []
             img_data = service.files().get_media(fileId=tid).execute()
@@ -162,10 +160,9 @@ elif menu == MENU_2:
                 draw = ImageDraw.Draw(img_draw)
                 for p in st.session_state.click_coords:
                     draw.ellipse((p[0]-5, p[1]-5, p[0]+5, p[1]+5), fill="red")
-                
-                # 이미지 클릭 좌표 획득
+
                 val = streamlit_image_coordinates(img_draw, key=f"label_{tid}_{len(st.session_state.temp_boxes)}")
-                
+
                 if val:
                     curr_point = (val["x"], val["y"])
                     if curr_point not in st.session_state.click_coords:
@@ -174,9 +171,6 @@ elif menu == MENU_2:
                             c = st.session_state.click_coords
                             l, r = min(c[0][0], c[1][0]), max(c[0][0], c[1][0])
                             t, b = min(c[0][1], c[1][1]), max(c[0][1], c[1][1])
-                            
-                            # YOLO 정규화 좌표 계산: (x_center, y_center, width, height)
-                            # Image size is 640x640
                             dw, dh = 1./640, 1./640
                             x = (l + r) / 2.0 * dw
                             y = (t + b) / 2.0 * dh
@@ -196,24 +190,20 @@ elif menu == MENU_2:
 # --- 3. AI 모델 분석 ---
 elif menu == MENU_3:
     st.header("🔍 AI 모델 분석")
-    # GitHub 루트 경로의 모델 로드
-    model = load_yolo_model("best.pt") 
-    
-    if model is None:
-        st.error("⚠️ 'best.pt' 파일을 찾을 수 없습니다. GitHub 최상위 폴더에 업로드했는지 확인하세요.")
-    else:
+    model = load_yolo_model("best.pt")
+
+    if model is not None:
         test_file = st.file_uploader("분석할 이미지 선택", type=['jpg', 'jpeg', 'png'])
         if test_file:
             img_pil = Image.open(test_file).convert("RGB")
             if st.button("🚀 분석 시작"):
                 with st.spinner("AI가 분석 중입니다..."):
                     img_input = img_pil.resize((640, 640))
-                    results = model.predict(img_input, conf=0.25) # 임계값 조정
+                    results = model.predict(img_input, conf=0.25)
                     res = results[0]
-                    
+
                     col1, col2 = st.columns([2, 1])
                     with col1:
-                        # YOLO 결과 플로팅 (BGR -> RGB 변환)
                         res_plotted = res.plot()
                         st.image(res_plotted, channels="BGR", use_column_width=True)
                     with col2:
