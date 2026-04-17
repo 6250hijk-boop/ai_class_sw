@@ -58,6 +58,21 @@ def get_next_data_index():
         return max(indices) + 1 if indices else 1
     except: return 1
 
+def upload_images_to_drive(files):
+    idx = get_next_data_index()
+    count = 0
+    for f in files:
+        img = Image.open(f).convert("RGB").resize((640, 640), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95)
+        service.files().create(
+            body={'name': f"data{idx}.jpg", 'parents': [PARENT_FOLDER_ID]},
+            media_body=MediaInMemoryUpload(buf.getvalue(), mimetype='image/jpeg')
+        ).execute()
+        idx += 1
+        count += 1
+    return count
+
 st.set_page_config(page_title="AI 실습 통합 플랫폼", layout="wide")
 
 if "labels" not in st.session_state: st.session_state.labels = ["apple"]
@@ -73,16 +88,33 @@ menu = st.sidebar.radio("메뉴 선택", [MENU_1, MENU_2, MENU_3])
 # --- 1. 사진 업로드 ---
 if menu == MENU_1:
     st.header("📸 학습 데이터 규격화 업로드")
-    files = st.file_uploader("사진 선택", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
-    if st.button("드라이브 전송") and files:
-        idx = get_next_data_index()
-        for f in files:
-            img = Image.open(f).convert("RGB").resize((640, 640), Image.Resampling.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=95)
-            service.files().create(body={'name': f"data{idx}.jpg", 'parents': [PARENT_FOLDER_ID]}, media_body=MediaInMemoryUpload(buf.getvalue(), mimetype='image/jpeg')).execute()
-            idx += 1
-        st.success("🎉 업로드 완료!")
+
+    # ── 탭 1: 갤러리/파일에서 선택, 탭 2: 카메라로 촬영 ──
+    tab1, tab2 = st.tabs(["🖼️ 갤러리 / 파일 선택", "📷 카메라로 촬영"])
+
+    with tab1:
+        st.subheader("갤러리 또는 파일에서 선택")
+        gallery_files = st.file_uploader(
+            "사진 선택 (여러 장 가능)",
+            type=['jpg', 'jpeg', 'png'],
+            accept_multiple_files=True,
+            key="gallery_uploader"
+        )
+        if st.button("📤 드라이브 전송", key="gallery_send") and gallery_files:
+            with st.spinner("업로드 중..."):
+                count = upload_images_to_drive(gallery_files)
+            st.success(f"🎉 {count}장 업로드 완료!")
+
+    with tab2:
+        st.subheader("카메라로 직접 촬영")
+        st.info("📱 핸드폰에서 접속하면 후면/전면 카메라를 선택할 수 있어요!")
+        camera_photo = st.camera_input("카메라로 사진 찍기", key="camera_input")
+        if camera_photo:
+            st.image(camera_photo, caption="촬영된 사진", use_column_width=True)
+            if st.button("📤 드라이브 전송", key="camera_send"):
+                with st.spinner("업로드 중..."):
+                    count = upload_images_to_drive([camera_photo])
+                st.success(f"🎉 {count}장 업로드 완료!")
 
 # --- 2. 라벨링 ---
 elif menu == MENU_2:
