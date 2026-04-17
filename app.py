@@ -168,7 +168,7 @@ elif menu == MENU_2:
 # --- 3. AI 모델 분석 ---
 elif menu == MENU_3:
     st.header("🔍 AI 사과 분석 및 정확도 확인")
-    model = load_yolo_model("best.pt")
+    model = load_yolo_model("디지털연구대회/best.pt")
     if model is None:
         st.warning("⚠️ GitHub에 'best.pt' 파일을 먼저 업로드해주세요.")
     else:
