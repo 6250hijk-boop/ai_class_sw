@@ -18,9 +18,15 @@ except ImportError:
 @st.cache_resource
 def load_yolo_model(model_path):
     if os.path.exists(model_path):
-        return YOLO(model_path)
+        try:
+            model = YOLO(model_path)
+            model.to('cpu')
+            return model
+        except Exception as e:
+            st.error(f"모델 로드 실패: {e}")
+            return None
     return None
-
+    
 def get_drive_service():
     if "google_oauth" in st.secrets:
         creds = Credentials(token=None, refresh_token=st.secrets["google_oauth"]["refresh_token"],
