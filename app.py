@@ -8,30 +8,34 @@ from googleapiclient.http import MediaInMemoryUpload
 import io
 import os
 import re
+import sys
 
-# YOLO 라이브러리 로드
+# YOLO 라이브러리 로드 - 상세 오류 출력
+YOLO = None
+YOLO_ERROR = None
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
-except ImportError:
-    YOLO = None
+except Exception as e:
     YOLO_AVAILABLE = False
+    YOLO_ERROR = str(e)
 
 @st.cache_resource
 def load_yolo_model(model_path):
     if not YOLO_AVAILABLE:
-        st.error("❌ ultralytics 라이브러리가 설치되지 않았습니다. requirements.txt를 확인하세요.")
+        st.error(f"❌ ultralytics import 실패 원인: {YOLO_ERROR}")
+        st.code(f"Python 버전: {sys.version}\n실행 경로: {sys.executable}")
         return None
     if not os.path.exists(model_path):
-        st.error(f"❌ 모델 파일을 찾을 수 없습니다: '{model_path}'")
-        st.info(f"📂 현재 경로: `{os.getcwd()}`\n\n📄 파일 목록: `{os.listdir('.')}`")
+        st.error(f"❌ 모델 파일 없음: '{model_path}'")
+        st.code(f"현재 경로: {os.getcwd()}\n파일 목록: {os.listdir('.')}")
         return None
     try:
         model = YOLO(model_path)
         model.to('cpu')
         return model
     except Exception as e:
-        st.error(f"❌ 모델 로드 중 오류 발생: {e}")
+        st.error(f"❌ 모델 로드 오류: {e}")
         return None
 
 def get_drive_service():
