@@ -1,6 +1,6 @@
 streamlit
 streamlit-image-coordinates
-ultralytics
+ultralytics==8.3.0
 Pillow
 google-auth
 google-auth-oauthlib
