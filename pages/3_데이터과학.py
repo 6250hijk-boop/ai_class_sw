@@ -7,7 +7,7 @@ st.set_page_config(page_title="빅데이터", page_icon="📊", layout="wide")
 check_login()
 username = get_username()
 
-st.title("📊 빅데이터 분석")
+st.title("📊 데이터 과학")
 st.markdown(f"👤 **{username}**")
 st.divider()
 
