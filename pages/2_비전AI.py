@@ -76,7 +76,6 @@ def load_users():
     return json.loads(data.decode('utf-8'))
 
 def get_file_prefix(username):
-    """학번_이름 prefix 생성"""
     users = load_users()
     if username in users:
         stunum = users[username].get('student_num', username)
@@ -121,6 +120,55 @@ def save_label(file_name, content):
             body={'name': file_name, 'parents': [TRAIN_LBL_ID]},
             media_body=media
         ).execute()
+
+def draw_label_overlay(img_pil, click_coords, temp_boxes):
+    """이미지에 십자선, 완성된 박스를 그려서 반환"""
+    img_draw = img_pil.copy()
+    draw = ImageDraw.Draw(img_draw)
+    W, H = img_draw.size
+
+    # ── 완성된 박스 그리기 (초록색) ──
+    for box_str in temp_boxes:
+        parts = box_str.strip().split()
+        if len(parts) == 5:
+            _, cx, cy, bw, bh = map(float, parts)
+            x1 = int((cx - bw/2) * W)
+            y1 = int((cy - bh/2) * H)
+            x2 = int((cx + bw/2) * W)
+            y2 = int((cy + bh/2) * H)
+            # 박스 테두리
+            draw.rectangle([x1, y1, x2, y2], outline="#00FF00", width=3)
+            # 모서리 강조
+            corner = 12
+            for cx2, cy2 in [(x1,y1),(x2,y1),(x1,y2),(x2,y2)]:
+                dx = 1 if cx2 == x1 else -1
+                dy = 1 if cy2 == y1 else -1
+                draw.line([cx2, cy2, cx2 + dx*corner, cy2], fill="#00FF00", width=4)
+                draw.line([cx2, cy2, cx2, cy2 + dy*corner], fill="#00FF00", width=4)
+
+    # ── 클릭 포인트 + 십자선 그리기 (빨간색) ──
+    for px, py in click_coords:
+        # 십자선
+        line_len = 20
+        draw.line([px - line_len, py, px + line_len, py], fill="#FF3333", width=2)
+        draw.line([px, py - line_len, px, py + line_len], fill="#FF3333", width=2)
+        # 중앙 원
+        r = 5
+        draw.ellipse([px-r, py-r, px+r, py+r], fill="#FF3333", outline="white", width=1)
+
+    # ── 첫 번째 점 찍은 후 점선 안내 (두 번째 점 유도) ──
+    if len(click_coords) == 1:
+        px, py = click_coords[0]
+        # 첫 점 주변에 사각형 가이드
+        guide = 60
+        for i in range(0, guide*2, 8):
+            if i % 16 < 8:
+                draw.rectangle([px-guide+i, py-guide, px-guide+i+6, py-guide], outline="#FFFF00", width=2)
+                draw.rectangle([px-guide+i, py+guide, px-guide+i+6, py+guide], outline="#FFFF00", width=2)
+                draw.rectangle([px-guide, py-guide+i, px-guide, py-guide+i+6], outline="#FFFF00", width=2)
+                draw.rectangle([px+guide, py-guide+i, px+guide, py-guide+i+6], outline="#FFFF00", width=2)
+
+    return img_draw
 
 # ── 세션 초기화 ──
 for key, val in {
@@ -215,10 +263,31 @@ with tab3:
 
     st.divider()
     st.subheader("🏷️ 라벨링")
+
     with st.sidebar:
+        st.subheader("⚙️ 라벨 설정")
         new_label = st.text_input("라벨 이름", value=st.session_state.vision_labels[0])
         if st.button("적용"):
             st.session_state.vision_labels[0] = new_label
+            st.rerun()
+        st.divider()
+        st.markdown("""
+        **📌 라벨링 방법**
+        1. 사진을 불러오세요
+        2. 물체의 **왼쪽 위** 클릭 🔴
+        3. 물체의 **오른쪽 아래** 클릭 🔴
+        4. 박스가 자동으로 그려져요 🟩
+        5. 저장 버튼을 누르세요 💾
+        """)
+        # 마지막 박스 취소 버튼
+        if st.session_state.temp_boxes:
+            if st.button("↩️ 마지막 박스 취소"):
+                st.session_state.temp_boxes.pop()
+                st.rerun()
+        # 전체 초기화
+        if st.button("🗑️ 전체 초기화"):
+            st.session_state.temp_boxes = []
+            st.session_state.click_coords = []
             st.rerun()
 
     items = get_user_images(prefix)
@@ -227,6 +296,7 @@ with tab3:
     else:
         target = st.selectbox("라벨링할 사진 선택", [i['name'] for i in items])
         tid = [i['id'] for i in items if i['name'] == target][0]
+
         if st.button("📥 사진 불러오기"):
             st.session_state.temp_boxes = []
             st.session_state.click_coords = []
@@ -238,11 +308,24 @@ with tab3:
         if st.session_state.loaded_image_id == tid:
             col1, col2 = st.columns([3, 1])
             with col1:
-                img_draw = st.session_state.loaded_image_pil.copy()
-                draw = ImageDraw.Draw(img_draw)
-                for p in st.session_state.click_coords:
-                    draw.ellipse((p[0]-5, p[1]-5, p[0]+5, p[1]+5), fill="red")
-                val = streamlit_image_coordinates(img_draw, key=f"lbl_{tid}_{len(st.session_state.temp_boxes)}")
+                # 이미지에 십자선 + 박스 오버레이
+                img_overlay = draw_label_overlay(
+                    st.session_state.loaded_image_pil,
+                    st.session_state.click_coords,
+                    st.session_state.temp_boxes
+                )
+
+                # 안내 메시지
+                if len(st.session_state.click_coords) == 0:
+                    st.info("📍 물체의 **왼쪽 위** 모서리를 클릭하세요")
+                else:
+                    st.warning("📍 물체의 **오른쪽 아래** 모서리를 클릭하세요")
+
+                val = streamlit_image_coordinates(
+                    img_overlay,
+                    key=f"lbl_{tid}_{len(st.session_state.temp_boxes)}_{len(st.session_state.click_coords)}"
+                )
+
                 if val:
                     pt = (val["x"], val["y"])
                     if pt not in st.session_state.click_coords:
@@ -251,17 +334,33 @@ with tab3:
                             c = st.session_state.click_coords
                             l, r = min(c[0][0],c[1][0]), max(c[0][0],c[1][0])
                             t, b = min(c[0][1],c[1][1]), max(c[0][1],c[1][1])
-                            x = (l+r)/2/640; y = (t+b)/2/640
-                            w = (r-l)/640;   h = (b-t)/640
+                            x = (l+r)/2/640
+                            y = (t+b)/2/640
+                            w = (r-l)/640
+                            h = (b-t)/640
                             st.session_state.temp_boxes.append(f"0 {x:.6f} {y:.6f} {w:.6f} {h:.6f}")
                             st.session_state.click_coords = []
                             st.rerun()
+                        else:
+                            st.rerun()
+
             with col2:
-                st.write(f"박스 수: **{len(st.session_state.temp_boxes)}**")
-                if st.button("💾 저장", type="primary"):
-                    txt_name = target.rsplit('.',1)[0] + ".txt"
-                    save_label(txt_name, "\n".join(st.session_state.temp_boxes).encode())
-                    st.success("저장 완료!")
+                st.markdown("### 📊 현황")
+                st.metric("완성된 박스", f"{len(st.session_state.temp_boxes)}개")
+
+                if st.session_state.temp_boxes:
+                    st.markdown("**박스 목록:**")
+                    for i, box in enumerate(st.session_state.temp_boxes):
+                        st.caption(f"박스 {i+1}: {box[:20]}...")
+
+                st.divider()
+                if st.button("💾 저장", type="primary", use_container_width=True):
+                    if not st.session_state.temp_boxes:
+                        st.error("박스가 없습니다!")
+                    else:
+                        txt_name = target.rsplit('.',1)[0] + ".txt"
+                        save_label(txt_name, "\n".join(st.session_state.temp_boxes).encode())
+                        st.success("✅ 저장 완료!")
 
 # ════════ 탭4: AI 실습 ════════
 with tab4:
