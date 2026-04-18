@@ -22,6 +22,76 @@ BEST_PT_NAME     = "best.pt"
 st.set_page_config(page_title="비전AI", page_icon="🔍", layout="wide")
 check_login()
 
+# ── 전체 로딩 + 스피너 커스텀 CSS ──
+st.markdown("""
+<style>
+/* ── 페이지 전환 로딩 오버레이 ── */
+[data-testid="stAppViewContainer"] > div:first-child {
+    animation: fadeIn 0.3s ease-in;
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── 전체 로딩바 (상단) ── */
+div[data-testid="stProgressBar"] > div {
+    background: linear-gradient(90deg, #4A90D9, #7B68EE, #4A90D9) !important;
+    background-size: 200% !important;
+    animation: shimmer 1.5s infinite !important;
+}
+@keyframes shimmer {
+    0%   { background-position: 200% center; }
+    100% { background-position: -200% center; }
+}
+
+/* ── 스피너 오버레이 ── */
+div[data-testid="stSpinner"] {
+    position: fixed !important;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+div[data-testid="stSpinner"] > div {
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    border: 2px solid #4A90D9;
+    border-radius: 20px;
+    padding: 48px 72px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    box-shadow: 0 0 60px rgba(74,144,217,0.5),
+                0 20px 40px rgba(0,0,0,0.4);
+}
+div[data-testid="stSpinner"] p {
+    color: #e0e0ff !important;
+    font-size: 18px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.5px !important;
+    margin: 0 !important;
+}
+div[data-testid="stSpinner"] svg {
+    width: 56px !important;
+    height: 56px !important;
+    stroke: #4A90D9 !important;
+    filter: drop-shadow(0 0 8px #4A90D9);
+}
+
+/* ── Streamlit 기본 앱 로딩 화면 ── */
+div.stApp > header {
+    background: transparent;
+}
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
 YOLO_AVAILABLE = False
 try:
     from ultralytics import YOLO
@@ -122,10 +192,18 @@ def save_label(file_name, content):
         ).execute()
 
 def draw_label_overlay(img_pil, click_coords, temp_boxes):
-    """이미지에 십자선, 완성된 박스를 그려서 반환"""
+    """이미지에 격자 + 십자선 + 완성된 박스를 그려서 반환"""
     img_draw = img_pil.copy()
     draw = ImageDraw.Draw(img_draw)
     W, H = img_draw.size
+
+    # ── 격자무늬 (가로 11칸, 세로 11칸 = 선 10개씩) ──
+    GRID_N = 11
+    for i in range(1, GRID_N):
+        x = int(W * i / GRID_N)
+        y = int(H * i / GRID_N)
+        draw.line([x, 0, x, H], fill=(200, 200, 200), width=1)  # 세로선
+        draw.line([0, y, W, y], fill=(200, 200, 200), width=1)  # 가로선
 
     # ── 완성된 박스 그리기 (초록색) ──
     for box_str in temp_boxes:
@@ -238,13 +316,13 @@ with tab3:
     with upload_tab1:
         gallery_files = st.file_uploader("사진 선택", type=['jpg','jpeg','png'], accept_multiple_files=True)
         if st.button("📤 업로드", key="gallery_up") and gallery_files:
-            with st.spinner("업로드 중..."):
+            with st.spinner("☁️ 구글 드라이브에 업로드 중입니다..."):
                 count = upload_images(gallery_files, prefix)
             st.success(f"🎉 {count}장 완료!")
     with upload_tab2:
         cam = st.camera_input("사진 찍기")
         if cam and st.button("📤 업로드", key="cam_up"):
-            with st.spinner("업로드 중..."):
+            with st.spinner("☁️ 구글 드라이브에 업로드 중입니다..."):
                 count = upload_images([cam], prefix)
             st.success(f"🎉 {count}장 완료!")
 
@@ -287,10 +365,11 @@ with tab3:
         if st.button("📥 사진 불러오기"):
             st.session_state.temp_boxes = []
             st.session_state.click_coords = []
-            svc = get_drive_service()
-            img_data = svc.files().get_media(fileId=tid).execute()
-            st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
-            st.session_state.loaded_image_id = tid
+            with st.spinner("🖼️ 사진을 불러오는 중입니다..."):
+                svc = get_drive_service()
+                img_data = svc.files().get_media(fileId=tid).execute()
+                st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
+                st.session_state.loaded_image_id = tid
 
         if st.session_state.loaded_image_id == tid:
             col1, col2 = st.columns([3, 1])
@@ -369,7 +448,7 @@ with tab4:
             if test_file:
                 img_pil = Image.open(test_file).convert("RGB")
                 if st.button("🚀 분석 시작"):
-                    with st.spinner("분석 중..."):
+                    with st.spinner("🤖 AI가 이미지를 분석 중입니다..."):
                         results = model.predict(img_pil.resize((640,640)), conf=0.25)
                         res = results[0]
                         col1, col2 = st.columns([2,1])
