@@ -20,8 +20,8 @@ USERS_FILE       = "users.json"
 st.set_page_config(page_title="관리자", page_icon="👑", layout="wide")
 check_admin()
 
-@st.cache_resource
 def get_drive_service():
+    """매번 새로운 서비스 객체 생성 (SSL 오류 방지)"""
     info = st.secrets["google_oauth"]
     creds = Credentials(
         token=None,
