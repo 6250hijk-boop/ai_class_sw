@@ -146,27 +146,14 @@ def draw_label_overlay(img_pil, click_coords, temp_boxes):
                 draw.line([cx2, cy2, cx2 + dx*corner, cy2], fill="#00FF00", width=4)
                 draw.line([cx2, cy2, cx2, cy2 + dy*corner], fill="#00FF00", width=4)
 
-    # ── 클릭 포인트 + 십자선 그리기 (빨간색) ──
+    # ── 클릭 포인트 + 전체 십자선 그리기 (빨간색) ──
     for px, py in click_coords:
-        # 십자선
-        line_len = 20
-        draw.line([px - line_len, py, px + line_len, py], fill="#FF3333", width=2)
-        draw.line([px, py - line_len, px, py + line_len], fill="#FF3333", width=2)
+        # 이미지 전체를 가로지르는 십자선
+        draw.line([0, py, W, py], fill="#FF3333", width=1)
+        draw.line([px, 0, px, H], fill="#FF3333", width=1)
         # 중앙 원
-        r = 5
-        draw.ellipse([px-r, py-r, px+r, py+r], fill="#FF3333", outline="white", width=1)
-
-    # ── 첫 번째 점 찍은 후 점선 안내 (두 번째 점 유도) ──
-    if len(click_coords) == 1:
-        px, py = click_coords[0]
-        # 첫 점 주변에 사각형 가이드
-        guide = 60
-        for i in range(0, guide*2, 8):
-            if i % 16 < 8:
-                draw.rectangle([px-guide+i, py-guide, px-guide+i+6, py-guide], outline="#FFFF00", width=2)
-                draw.rectangle([px-guide+i, py+guide, px-guide+i+6, py+guide], outline="#FFFF00", width=2)
-                draw.rectangle([px-guide, py-guide+i, px-guide, py-guide+i+6], outline="#FFFF00", width=2)
-                draw.rectangle([px+guide, py-guide+i, px+guide, py-guide+i+6], outline="#FFFF00", width=2)
+        r = 6
+        draw.ellipse([px-r, py-r, px+r, py+r], fill="#FF3333", outline="white", width=2)
 
     return img_draw
 
@@ -361,6 +348,13 @@ with tab3:
                         txt_name = target.rsplit('.',1)[0] + ".txt"
                         save_label(txt_name, "\n".join(st.session_state.temp_boxes).encode())
                         st.success("✅ 저장 완료!")
+                if st.button("↩️ 마지막 박스 취소", use_container_width=True):
+                    if st.session_state.temp_boxes:
+                        st.session_state.temp_boxes.pop()
+                        st.session_state.click_coords = []
+                        st.rerun()
+                    else:
+                        st.warning("취소할 박스가 없습니다.")
 
 # ════════ 탭4: AI 실습 ════════
 with tab4:
