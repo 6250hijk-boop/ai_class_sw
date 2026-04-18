@@ -454,7 +454,7 @@ with tab3:
                     st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
                     st.session_state.loaded_image_id = tid
 
-        if st.session_state.loaded_image_id == tid:
+        if 'tid' in dir() and st.session_state.loaded_image_id == tid:
             col1, col2 = st.columns([3, 1])
             with col1:
                 # 이미지에 십자선 + 박스 오버레이
