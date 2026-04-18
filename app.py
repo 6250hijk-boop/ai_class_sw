@@ -11,7 +11,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# ── 폴더 ID 상수 ──
 SYSTEM_FOLDER_ID = "1_zMtw7RDvOAZ3P7o2rNCKeO4DhKdZ3nv"
 USERS_FILE       = "users.json"
 
@@ -64,31 +63,25 @@ def is_admin_credentials(username, password):
     except:
         return False
 
-# ── 이메일 발송 ──
 def send_email(to_email, subject, body):
     try:
         sender_email    = st.secrets["email"]["sender"]
         sender_password = st.secrets["email"]["password"]
-
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"]    = sender_email
         msg["To"]      = to_email
-
         html = f"""
         <html><body>
         <div style="font-family:Arial,sans-serif;max-width:500px;margin:auto;
                     padding:30px;border:1px solid #ddd;border-radius:10px;">
             <h2 style="color:#4A90D9;">🚀 AI 학습 플랫폼</h2>
-            <hr/>
-            {body}
-            <hr/>
+            <hr/>{body}<hr/>
             <p style="color:#999;font-size:12px;">본 메일은 자동 발송된 메일입니다.</p>
         </div>
         </body></html>
         """
         msg.attach(MIMEText(html, "html"))
-
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(sender_email, sender_password)
             server.sendmail(sender_email, to_email, msg.as_string())
@@ -98,20 +91,17 @@ def send_email(to_email, subject, body):
         return False
 
 def send_account_info(to_email, username):
-    """아이디 찾기 이메일 발송"""
     body = f"""
     <p>안녕하세요! 아이디 찾기 요청이 접수되었습니다.</p>
     <div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0;">
         <p style="margin:0;font-size:16px;">📧 이메일: <b>{to_email}</b></p>
         <p style="margin:0;font-size:16px;">👤 아이디: <b>{username}</b></p>
     </div>
-    <p>비밀번호는 보안상 확인이 불가능합니다.<br/>
-    비밀번호를 잊으셨다면 <b>비밀번호 재설정</b>을 이용해주세요.</p>
+    <p>비밀번호는 보안상 확인이 불가능합니다.<br/>비밀번호를 잊으셨다면 <b>비밀번호 재설정</b>을 이용해주세요.</p>
     """
     return send_email(to_email, "[AI 학습 플랫폼] 아이디 안내", body)
 
 def send_temp_password(to_email, username, temp_pw):
-    """임시 비밀번호 이메일 발송"""
     body = f"""
     <p>안녕하세요, <b>{username}</b>님! 임시 비밀번호가 발급되었습니다.</p>
     <div style="background:#fff3cd;padding:15px;border-radius:8px;margin:15px 0;
@@ -123,19 +113,13 @@ def send_temp_password(to_email, username, temp_pw):
     return send_email(to_email, "[AI 학습 플랫폼] 임시 비밀번호 안내", body)
 
 def generate_temp_password():
-    """임시 비밀번호 생성 (8자리)"""
     import random, string
-    chars = string.ascii_letters + string.digits
-    return ''.join(random.choices(chars, k=8))
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=8))
 
 # ── 세션 초기화 ──
 st.set_page_config(page_title="AI 학습 플랫폼", page_icon="🚀", layout="wide")
 
-for key, val in {
-    "logged_in": False,
-    "username": "",
-    "is_admin": False,
-}.items():
+for key, val in {"logged_in": False, "username": "", "is_admin": False}.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
@@ -144,14 +128,13 @@ for key, val in {
 # ════════════════════════════════════════════
 if not st.session_state.logged_in:
     st.title("🚀 AI 학습 플랫폼")
-    st.markdown("#### 비전AI · 빅데이터 · 머신러닝을 배우고 실습해보세요!")
+    st.markdown("#### 인공지능 기초 · 비전AI · 데이터과학을 배우고 실습해보세요!")
     st.divider()
 
     col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
         tab_login, tab_signup, tab_find = st.tabs(["🔑 로그인", "📝 회원가입", "🔍 아이디/비밀번호 찾기"])
 
-        # ── 로그인 ──
         with tab_login:
             login_id = st.text_input("아이디", key="login_id")
             login_pw = st.text_input("비밀번호", type="password", key="login_pw")
@@ -173,13 +156,11 @@ if not st.session_state.logged_in:
                     else:
                         st.error("❌ 아이디 또는 비밀번호가 틀렸습니다.")
 
-        # ── 회원가입 ──
         with tab_signup:
             new_id    = st.text_input("아이디 (영문/숫자 4~20자)", key="signup_id")
             new_email = st.text_input("이메일 주소", key="signup_email", placeholder="example@gmail.com")
             new_pw    = st.text_input("비밀번호 (6자 이상)", type="password", key="signup_pw")
             new_pw2   = st.text_input("비밀번호 확인", type="password", key="signup_pw2")
-
             if st.button("회원가입", type="primary", use_container_width=True):
                 if not new_id or not new_email or not new_pw or not new_pw2:
                     st.error("모든 항목을 입력하세요.")
@@ -206,11 +187,8 @@ if not st.session_state.logged_in:
                         save_users(users)
                         st.success(f"✅ '{new_id}' 가입 완료! 로그인하세요.")
 
-        # ── 아이디/비밀번호 찾기 ──
         with tab_find:
             find_tab1, find_tab2 = st.tabs(["👤 아이디 찾기", "🔑 비밀번호 찾기"])
-
-            # 아이디 찾기
             with find_tab1:
                 st.markdown("가입 시 등록한 이메일을 입력하면 아이디를 보내드려요.")
                 find_id_email = st.text_input("이메일 주소", key="find_id_email", placeholder="example@gmail.com")
@@ -227,8 +205,6 @@ if not st.session_state.logged_in:
                                 st.success("✅ 아이디를 이메일로 발송했습니다!")
                         else:
                             st.error("❌ 해당 이메일로 가입된 계정이 없습니다.")
-
-            # 비밀번호 찾기
             with find_tab2:
                 st.markdown("가입 시 등록한 이메일을 입력하면 임시 비밀번호를 보내드려요.")
                 find_pw_email = st.text_input("이메일 주소", key="find_pw_email", placeholder="example@gmail.com")
@@ -245,7 +221,7 @@ if not st.session_state.logged_in:
                             with st.spinner("이메일 발송 중..."):
                                 ok = send_temp_password(find_pw_email, matched[0], temp_pw)
                             if ok:
-                                st.success("✅ 임시 비밀번호를 이메일로 발송했습니다!\n로그인 후 비밀번호를 변경해주세요.")
+                                st.success("✅ 임시 비밀번호를 이메일로 발송했습니다!")
                         else:
                             st.error("❌ 해당 이메일로 가입된 계정이 없습니다.")
 
@@ -275,33 +251,33 @@ else:
 
     with col1:
         st.markdown("""
-        ### 🔍 비전 AI
+        ### 🧠 인공지능 기초
+        - 인공지능이란 무엇인가
+        - 머신러닝의 원리
+        - 지도 / 비지도 학습
+        - AI 윤리와 사회적 영향
+        """)
+        st.page_link("pages/1_인공지능기초.py", label="📖 인공지능 기초 학습하기", use_container_width=True)
+
+    with col2:
+        st.markdown("""
+        ### 🔍 비전 AI (인공지능 실무)
         - 컴퓨터 비전 이론
         - 이미지 분류 / 객체 탐지
         - 데이터 수집 · 라벨링
         - YOLO 모델 실습
         """)
-        st.page_link("pages/1_비전AI.py", label="📖 비전AI 학습하기", use_container_width=True)
-
-    with col2:
-        st.markdown("""
-        ### 📊 빅데이터 분석
-        - 데이터란 무엇인가
-        - 데이터 수집 · 전처리
-        - 시각화 기초
-        - 실습: 데이터 분석
-        """)
-        st.page_link("pages/2_빅데이터.py", label="📖 빅데이터 학습하기", use_container_width=True)
+        st.page_link("pages/2_비전AI.py", label="📖 비전AI 학습하기", use_container_width=True)
 
     with col3:
         st.markdown("""
-        ### 🤖 머신러닝 기초
-        - 머신러닝이란?
-        - 지도 / 비지도 학습
-        - 모델 학습 과정
-        - 실습: 간단한 분류기
+        ### 📊 데이터 과학
+        - 빅데이터란 무엇인가
+        - 데이터 수집 · 전처리
+        - 시각화 (Pandas, Matplotlib)
+        - 데이터 기반 의사결정
         """)
-        st.page_link("pages/3_머신러닝.py", label="📖 머신러닝 학습하기", use_container_width=True)
+        st.page_link("pages/3_데이터과학.py", label="📖 데이터과학 학습하기", use_container_width=True)
 
     if st.session_state.is_admin:
         st.divider()
