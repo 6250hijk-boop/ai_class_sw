@@ -100,7 +100,21 @@ except Exception as e:
     YOLO_ERROR = str(e)
 
 @st.cache_resource
+def get_drive_credentials():
+    """credentials만 캐싱 (서비스 객체는 캐싱 안 함)"""
+    info = st.secrets["google_oauth"]
+    creds = Credentials(
+        token=None,
+        refresh_token=info["refresh_token"],
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=info["client_id"],
+        client_secret=info["client_secret"],
+        scopes=['https://www.googleapis.com/auth/drive']
+    )
+    return info
+
 def get_drive_service():
+    """매번 새로운 서비스 객체 생성 (SSL 오류 방지)"""
     info = st.secrets["google_oauth"]
     creds = Credentials(
         token=None,
