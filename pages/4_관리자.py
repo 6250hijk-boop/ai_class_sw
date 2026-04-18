@@ -6,13 +6,10 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
-from PIL import Image
+from PIL import Image, ImageDraw
 from collections import defaultdict
-import io
-import json
-import random
+import io, json, random
 
-# ── 폴더 ID ──
 SYSTEM_FOLDER_ID = "1_zMtw7RDvOAZ3P7o2rNCKeO4DhKdZ3nv"
 TRAIN_IMG_ID     = "1vAmEqTkOfI7GELAOYBSknv0zhMX00RPv"
 TRAIN_LBL_ID     = "1WarT3vOu4alUk-g_262yhTI_unSew7cR"
@@ -61,18 +58,42 @@ def save_users(users_dict):
             media_body=media
         ).execute()
 
-def get_all_train_images():
+def get_all_images(folder_id):
     svc = get_drive_service()
-    query = f"'{TRAIN_IMG_ID}' in parents and mimeType contains 'image/' and trashed=false"
+    query = f"'{folder_id}' in parents and mimeType contains 'image/' and trashed=false"
     return svc.files().list(q=query, fields="files(id, name)").execute().get('files', [])
+
+def get_all_labels(folder_id):
+    svc = get_drive_service()
+    query = f"'{folder_id}' in parents and mimeType='text/plain' and trashed=false"
+    return svc.files().list(q=query, fields="files(id, name)").execute().get('files', [])
+
+def delete_file(file_id):
+    svc = get_drive_service()
+    svc.files().delete(fileId=file_id).execute()
+
+def draw_boxes_on_image(img_pil, label_content):
+    """라벨 txt 내용을 파싱해서 이미지에 박스 그리기"""
+    draw = ImageDraw.Draw(img_pil)
+    W, H = img_pil.size
+    lines = label_content.strip().split('\n')
+    for line in lines:
+        parts = line.strip().split()
+        if len(parts) == 5:
+            _, cx, cy, w, h = map(float, parts)
+            x1 = int((cx - w/2) * W)
+            y1 = int((cy - h/2) * H)
+            x2 = int((cx + w/2) * W)
+            y2 = int((cy + h/2) * H)
+            draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+    return img_pil
 
 def extract_val_data(ratio=0.2):
     svc = get_drive_service()
-    all_imgs = get_all_train_images()
+    all_imgs = get_all_images(TRAIN_IMG_ID)
     if not all_imgs:
         return 0, 0
-    query = f"'{TRAIN_LBL_ID}' in parents and trashed=false"
-    all_lbls = svc.files().list(q=query, fields="files(id, name)").execute().get('files', [])
+    all_lbls = get_all_labels(TRAIN_LBL_ID)
     lbl_map = {f['name']: f['id'] for f in all_lbls}
     labeled_imgs = [img for img in all_imgs if img['name'].replace('.jpg', '.txt') in lbl_map]
     if not labeled_imgs:
@@ -89,10 +110,7 @@ def extract_val_data(ratio=0.2):
         if exist:
             svc.files().update(fileId=exist[0]['id'], media_body=media).execute()
         else:
-            svc.files().create(
-                body={'name': img['name'], 'parents': [VAL_IMG_ID]},
-                media_body=media
-            ).execute()
+            svc.files().create(body={'name': img['name'], 'parents': [VAL_IMG_ID]}, media_body=media).execute()
         copied_imgs += 1
         lbl_name = img['name'].replace('.jpg', '.txt')
         if lbl_name in lbl_map:
@@ -103,64 +121,124 @@ def extract_val_data(ratio=0.2):
             if exist2:
                 svc.files().update(fileId=exist2[0]['id'], media_body=media2).execute()
             else:
-                svc.files().create(
-                    body={'name': lbl_name, 'parents': [VAL_LBL_ID]},
-                    media_body=media2
-                ).execute()
+                svc.files().create(body={'name': lbl_name, 'parents': [VAL_LBL_ID]}, media_body=media2).execute()
             copied_lbls += 1
     return copied_imgs, copied_lbls
 
-# ── UI ──
+# ════════════════════════════════════════════
+#  UI
+# ════════════════════════════════════════════
 st.title("👑 관리자 페이지")
 st.divider()
 
-tab_users, tab_files, tab_val = st.tabs(["👥 회원 관리", "🖼️ 전체 데이터", "🔬 검증 데이터 추출"])
+tab_users, tab_data, tab_val = st.tabs(["👥 회원 관리", "🖼️ 데이터 관리", "🔬 검증 데이터 추출"])
 
-# ── 회원 관리 ──
+# ════════ 탭1: 회원 관리 ════════
 with tab_users:
     st.subheader("등록된 회원 목록")
     users = load_users()
+
+    # 전체 이미지/라벨 목록 미리 가져오기
+    all_train_imgs = get_all_images(TRAIN_IMG_ID)
+    all_train_lbls = get_all_labels(TRAIN_LBL_ID)
+
     if not users:
         st.info("등록된 회원이 없습니다.")
     else:
         st.write(f"총 **{len(users)}명**")
+        st.divider()
+
         for uid, info in users.items():
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.write(f"👤 **{uid}** — 가입일: {info.get('created_at','알 수 없음')}")
-            with col2:
-                if st.button("🗑️ 삭제", key=f"del_{uid}"):
+            stunum = info.get('student_num', '-')
+            name   = info.get('name', '-')
+            email  = info.get('email', '-')
+            prefix = f"{stunum}_{name}"
+
+            # 해당 학생 파일 수 계산
+            img_count = sum(1 for f in all_train_imgs if f['name'].startswith(prefix + '_data'))
+            lbl_count = sum(1 for f in all_train_lbls if f['name'].startswith(prefix + '_data'))
+
+            with st.expander(f"🎓 {stunum} | {name} | 사진 {img_count}장 | 라벨 {lbl_count}개"):
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("학번", stunum)
+                col2.metric("이름", name)
+                col3.metric("업로드", f"{img_count}장")
+                col4.metric("라벨링", f"{lbl_count}개")
+                st.caption(f"📧 {email} | 가입일: {info.get('created_at','-')}")
+
+                # 해당 학생 이미지 목록
+                student_imgs = [f for f in all_train_imgs if f['name'].startswith(prefix + '_data')]
+                student_lbls = {f['name']: f['id'] for f in all_train_lbls if f['name'].startswith(prefix + '_data')}
+
+                if student_imgs:
+                    st.markdown("**📸 업로드된 사진 (클릭하면 삭제)**")
+                    svc = get_drive_service()
+                    cols = st.columns(4)
+                    for i, img in enumerate(student_imgs):
+                        with cols[i % 4]:
+                            try:
+                                img_data = svc.files().get_media(fileId=img['id']).execute()
+                                img_pil  = Image.open(io.BytesIO(img_data)).convert("RGB")
+
+                                # 라벨 있으면 박스 그리기
+                                lbl_name = img['name'].replace('.jpg', '.txt')
+                                has_label = lbl_name in student_lbls
+                                if has_label:
+                                    lbl_data = svc.files().get_media(fileId=student_lbls[lbl_name]).execute()
+                                    lbl_text = lbl_data.decode('utf-8')
+                                    img_pil  = draw_boxes_on_image(img_pil, lbl_text)
+
+                                label_icon = "🟢" if has_label else "🔴"
+                                st.image(img_pil, caption=f"{label_icon} {img['name']}", use_column_width=True)
+
+                                # 삭제 버튼
+                                if st.button(f"🗑️ 삭제", key=f"del_img_{img['id']}"):
+                                    delete_file(img['id'])
+                                    if has_label:
+                                        delete_file(student_lbls[lbl_name])
+                                    st.success(f"삭제 완료!")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"로드 실패: {e}")
+
+                st.divider()
+                if st.button(f"🗑️ 회원 삭제", key=f"del_user_{uid}", type="secondary"):
                     del users[uid]
                     save_users(users)
                     st.success(f"'{uid}' 삭제!")
                     st.rerun()
 
-# ── 전체 데이터 ──
-with tab_files:
-    st.subheader("train/images 전체 파일")
-    all_imgs = get_all_train_images()
-    if not all_imgs:
-        st.info("업로드된 파일이 없습니다.")
-    else:
-        grouped = defaultdict(list)
-        for img in all_imgs:
-            uname = img['name'].split('_data')[0] if '_data' in img['name'] else '기타'
-            grouped[uname].append(img)
-        st.write(f"총 **{len(all_imgs)}장** / **{len(grouped)}명**")
-        for uname, imgs in grouped.items():
-            with st.expander(f"👤 {uname} ({len(imgs)}장)"):
-                svc = get_drive_service()
-                cols = st.columns(4)
-                for i, img in enumerate(imgs):
-                    with cols[i % 4]:
-                        img_data = svc.files().get_media(fileId=img['id']).execute()
-                        st.image(Image.open(io.BytesIO(img_data)), caption=img['name'], use_column_width=True)
+# ════════ 탭2: 데이터 관리 ════════
+with tab_data:
+    st.subheader("🖼️ 전체 데이터 현황")
 
-# ── 검증 데이터 추출 ──
+    # train 데이터
+    with st.expander("📂 Train 데이터", expanded=True):
+        all_train_imgs = get_all_images(TRAIN_IMG_ID)
+        all_train_lbls = get_all_labels(TRAIN_LBL_ID)
+        lbl_map = {f['name']: f['id'] for f in all_train_lbls}
+
+        labeled   = sum(1 for f in all_train_imgs if f['name'].replace('.jpg','.txt') in lbl_map)
+        unlabeled = len(all_train_imgs) - labeled
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("전체 이미지", f"{len(all_train_imgs)}장")
+        col2.metric("라벨링 완료", f"{labeled}개")
+        col3.metric("라벨링 미완료", f"{unlabeled}개")
+
+    # val 데이터
+    with st.expander("📂 Val 데이터"):
+        all_val_imgs = get_all_images(VAL_IMG_ID)
+        all_val_lbls = get_all_labels(VAL_LBL_ID)
+        col1, col2 = st.columns(2)
+        col1.metric("검증 이미지", f"{len(all_val_imgs)}장")
+        col2.metric("검증 라벨", f"{len(all_val_lbls)}개")
+
+# ════════ 탭3: 검증 데이터 추출 ════════
 with tab_val:
     st.subheader("🔬 검증용 데이터 추출")
     st.info("train 폴더에서 랜덤 추출하여 val 폴더로 복사합니다.")
-    all_imgs = get_all_train_images()
+    all_imgs = get_all_images(TRAIN_IMG_ID)
     st.write(f"현재 train/images: **{len(all_imgs)}장**")
     ratio = st.slider("검증 데이터 비율 (%)", 5, 40, 20, 5)
     n_expected = max(1, int(len(all_imgs) * ratio / 100))
