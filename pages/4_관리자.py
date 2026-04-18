@@ -116,7 +116,7 @@ def extract_val_data(ratio=0.2):
         if lbl_name in lbl_map:
             lbl_data = svc.files().get_media(fileId=lbl_map[lbl_name]).execute()
             q2 = f"name='{lbl_name}' and '{VAL_LBL_ID}' in parents and trashed=false"
-            exist2 = svc.files().list(q2, fields="files(id)").execute().get('files', [])
+            exist2 = svc.files().list(q=q2, fields="files(id)").execute().get('files', [])
             media2 = MediaInMemoryUpload(lbl_data, mimetype='text/plain')
             if exist2:
                 svc.files().update(fileId=exist2[0]['id'], media_body=media2).execute()
