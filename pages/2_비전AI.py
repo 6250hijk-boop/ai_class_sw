@@ -115,26 +115,25 @@ def get_drive_service():
     return build('drive', 'v3', credentials=creds)
 
 @st.cache_resource
-def load_yolo_model(file_id):
+def load_yolo_model():
     if not YOLO_AVAILABLE:
+        st.error(f"❌ ultralytics 설치 필요")
+        return None
+    # 깃허브 루트의 best.pt 직접 사용
+    model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "best.pt")
+    if not os.path.exists(model_path):
+        # 현재 디렉토리에서도 찾기
+        model_path = "best.pt"
+    if not os.path.exists(model_path):
+        st.error(f"❌ best.pt 파일을 찾을 수 없습니다. (경로: {model_path})")
         return None
     try:
-        svc = get_drive_service()
-        data = svc.files().get_media(fileId=file_id).execute()
-        with open("/tmp/best.pt", "wb") as f:
-            f.write(data)
-        model = YOLO("/tmp/best.pt")
+        model = YOLO(model_path)
         model.to('cpu')
         return model
     except Exception as e:
         st.error(f"❌ 모델 로드 오류: {e}")
         return None
-
-def get_best_pt_id():
-    svc = get_drive_service()
-    query = f"name='{BEST_PT_NAME}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
-    files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
-    return files[0]['id'] if files else None
 
 def load_users():
     svc = get_drive_service()
@@ -438,28 +437,37 @@ with tab3:
 # ════════ 탭4: AI 실습 ════════
 with tab4:
     st.header("🤖 AI 모델 분석 실습")
-    best_pt_id = get_best_pt_id()
-    if not best_pt_id:
-        st.error("❌ system 폴더에 best.pt가 없습니다.")
-    else:
-        model = load_yolo_model(best_pt_id)
-        if model:
-            test_file = st.file_uploader("분석할 이미지", type=['jpg','jpeg','png'])
-            if test_file:
-                img_pil = Image.open(test_file).convert("RGB")
-                if st.button("🚀 분석 시작"):
-                    with st.spinner("🤖 AI가 이미지를 분석 중입니다..."):
-                        results = model.predict(img_pil.resize((640,640)), conf=0.25)
-                        res = results[0]
-                        col1, col2 = st.columns([2,1])
-                        with col1:
-                            st.image(res.plot(), channels="BGR", use_column_width=True)
-                        with col2:
-                            if len(res.boxes) > 0:
-                                st.success(f"검출: {len(res.boxes)}개")
-                                for i, box in enumerate(res.boxes):
-                                    conf = float(box.conf[0]) * 100
-                                    st.info(f"**{i+1}**: {conf:.1f}%")
-                                    st.progress(conf/100)
-                            else:
-                                st.warning("검출된 사물이 없습니다.")
+    model = load_yolo_model()
+    if model:
+        # 모델 정보 표시
+        with st.expander("🔎 모델 정보 확인"):
+            st.write(f"**클래스 목록:** {model.names}")
+            st.write(f"**클래스 수:** {len(model.names)}")
+
+        test_file = st.file_uploader("분석할 이미지", type=['jpg','jpeg','png'])
+        if test_file:
+            img_pil = Image.open(test_file).convert("RGB")
+            st.image(img_pil, caption="업로드된 이미지", use_column_width=True)
+
+            conf_val = st.slider("신뢰도 임계값 (낮을수록 더 많이 검출)", 0.01, 0.9, 0.25, 0.01)
+
+            if st.button("🚀 분석 시작"):
+                with st.spinner("🤖 AI가 이미지를 분석 중입니다..."):
+                    results = model.predict(img_pil.resize((640,640)), conf=conf_val)
+                    res = results[0]
+                    col1, col2 = st.columns([2,1])
+                    with col1:
+                        st.image(res.plot(), channels="BGR", use_column_width=True)
+                    with col2:
+                        st.write(f"**신뢰도 임계값:** {conf_val}")
+                        st.write(f"**검출 수:** {len(res.boxes)}")
+                        if len(res.boxes) > 0:
+                            st.success(f"✅ {len(res.boxes)}개 검출!")
+                            for i, box in enumerate(res.boxes):
+                                label = model.names[int(box.cls[0])]
+                                conf  = float(box.conf[0]) * 100
+                                st.info(f"**{i+1}. {label}**: {conf:.1f}%")
+                                st.progress(conf/100)
+                        else:
+                            st.warning("검출된 사물이 없습니다.")
+                            st.info("💡 신뢰도 임계값을 더 낮춰보세요 (예: 0.05)")
