@@ -7,7 +7,7 @@ st.set_page_config(page_title="머신러닝", page_icon="🤖", layout="wide")
 check_login()
 username = get_username()
 
-st.title("🤖 머신러닝 기초")
+st.title("📊 빅데이터 분석")
 st.markdown(f"👤 **{username}**")
 st.divider()
 
