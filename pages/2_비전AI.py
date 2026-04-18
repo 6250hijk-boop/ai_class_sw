@@ -158,6 +158,34 @@ def load_users():
     data = svc.files().get_media(fileId=files[0]['id']).execute()
     return json.loads(data.decode('utf-8'))
 
+def load_labels():
+    """관리자가 설정한 라벨 목록 불러오기"""
+    svc = get_drive_service()
+    query = f"name='labels.json' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
+    files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
+    if not files:
+        return ["vicpie"]
+    data = svc.files().get_media(fileId=files[0]['id']).execute()
+    return json.loads(data.decode('utf-8'))
+
+def get_label_status(prefix):
+    """학생의 이미지별 라벨링 완료 여부 반환"""
+    svc = get_drive_service()
+    query = f"'{TRAIN_IMG_ID}' in parents and name contains '{prefix}_data' and trashed=false"
+    imgs = svc.files().list(q=query, fields="files(id, name)").execute().get('files', [])
+    query2 = f"'{TRAIN_LBL_ID}' in parents and name contains '{prefix}_data' and trashed=false"
+    lbls = svc.files().list(q=query2, fields="files(id, name)").execute().get('files', [])
+    lbl_names = {f['name'] for f in lbls}
+    result = []
+    for img in imgs:
+        txt_name = img['name'].replace('.jpg', '.txt')
+        result.append({
+            'id': img['id'],
+            'name': img['name'],
+            'labeled': txt_name in lbl_names
+        })
+    return result
+
 def get_file_prefix(username):
     users = load_users()
     if username in users:
@@ -345,15 +373,20 @@ with tab3:
     with st.sidebar:
         st.subheader("⚙️ 라벨 설정")
 
-        # 기본 제공 라벨 목록 + 직접 입력
-        DEFAULT_LABELS = ["apple", "orange", "banana", "grape", "strawberry", "기타"]
-        label_choice = st.selectbox("라벨 선택", DEFAULT_LABELS + ["✏️ 직접 입력"])
-        if label_choice == "✏️ 직접 입력":
-            custom_label = st.text_input("직접 입력", placeholder="라벨명 입력")
+        # 드라이브에서 라벨 목록 불러오기
+        drive_labels = load_labels()
+        if drive_labels:
+            label_choice = st.selectbox("라벨 선택", drive_labels + ["✏️ 직접 입력"])
+            if label_choice == "✏️ 직접 입력":
+                custom_label = st.text_input("직접 입력", placeholder="라벨명 입력")
+                if custom_label:
+                    st.session_state.vision_labels[0] = custom_label
+            else:
+                st.session_state.vision_labels[0] = label_choice
+        else:
+            custom_label = st.text_input("라벨 이름 입력", placeholder="라벨명 입력")
             if custom_label:
                 st.session_state.vision_labels[0] = custom_label
-        else:
-            st.session_state.vision_labels[0] = label_choice
 
         st.info(f"현재 라벨: **{st.session_state.vision_labels[0]}**")
         st.divider()
@@ -374,21 +407,52 @@ with tab3:
             st.session_state.click_coords = []
             st.rerun()
 
-    items = get_user_images(prefix)
-    if not items:
+    # 라벨링 완료/미완료 구분해서 이미지 목록 표시
+    with st.spinner("📂 사진 목록 불러오는 중..."):
+        img_status_list = get_label_status(prefix)
+
+    if not img_status_list:
         st.info("업로드된 사진이 없습니다.")
     else:
-        target = st.selectbox("라벨링할 사진 선택", [i['name'] for i in items])
-        tid = [i['id'] for i in items if i['name'] == target][0]
+        # 완료/미완료 통계
+        labeled_count   = sum(1 for i in img_status_list if i['labeled'])
+        unlabeled_count = sum(1 for i in img_status_list if not i['labeled'])
 
-        if st.button("📥 사진 불러오기"):
-            st.session_state.temp_boxes = []
-            st.session_state.click_coords = []
-            with st.spinner("🖼️ 사진을 불러오는 중입니다..."):
-                svc = get_drive_service()
-                img_data = svc.files().get_media(fileId=tid).execute()
-                st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
-                st.session_state.loaded_image_id = tid
+        col1, col2, col3 = st.columns(3)
+        col1.metric("전체", f"{len(img_status_list)}장")
+        col2.metric("🟢 라벨링 완료", f"{labeled_count}장")
+        col3.metric("🔴 라벨링 미완료", f"{unlabeled_count}장")
+
+        st.divider()
+
+        # 필터 선택
+        filter_opt = st.radio("표시할 사진", ["전체", "🔴 미완료만", "🟢 완료만"], horizontal=True)
+
+        if filter_opt == "🔴 미완료만":
+            filtered = [i for i in img_status_list if not i['labeled']]
+        elif filter_opt == "🟢 완료만":
+            filtered = [i for i in img_status_list if i['labeled']]
+        else:
+            filtered = img_status_list
+
+        if not filtered:
+            st.info("해당하는 사진이 없습니다.")
+        else:
+            # 선택박스에 완료 여부 표시
+            options = [f"{'🟢' if i['labeled'] else '🔴'} {i['name']}" for i in filtered]
+            selected_opt = st.selectbox("라벨링할 사진 선택", options)
+            selected_idx = options.index(selected_opt)
+            target = filtered[selected_idx]['name']
+            tid    = filtered[selected_idx]['id']
+
+            if st.button("📥 사진 불러오기"):
+                st.session_state.temp_boxes = []
+                st.session_state.click_coords = []
+                with st.spinner("🖼️ 사진을 불러오는 중입니다..."):
+                    svc = get_drive_service()
+                    img_data = svc.files().get_media(fileId=tid).execute()
+                    st.session_state.loaded_image_pil = Image.open(io.BytesIO(img_data)).convert("RGB").resize((640, 640))
+                    st.session_state.loaded_image_id = tid
 
         if st.session_state.loaded_image_id == tid:
             col1, col2 = st.columns([3, 1])
