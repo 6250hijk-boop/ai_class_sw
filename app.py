@@ -157,15 +157,20 @@ if not st.session_state.logged_in:
                         st.error("❌ 아이디 또는 비밀번호가 틀렸습니다.")
 
         with tab_signup:
-            new_id    = st.text_input("아이디 (영문/숫자 4~20자)", key="signup_id")
-            new_email = st.text_input("이메일 주소", key="signup_email", placeholder="example@gmail.com")
-            new_pw    = st.text_input("비밀번호 (6자 이상)", type="password", key="signup_pw")
-            new_pw2   = st.text_input("비밀번호 확인", type="password", key="signup_pw2")
+            new_id      = st.text_input("아이디 (영문/숫자 4~20자)", key="signup_id")
+            new_stunum  = st.text_input("학번 (숫자)", key="signup_stunum", placeholder="예: 10101")
+            new_name    = st.text_input("이름", key="signup_name", placeholder="예: 홍길동")
+            new_email   = st.text_input("이메일 주소", key="signup_email", placeholder="example@gmail.com")
+            new_pw      = st.text_input("비밀번호 (6자 이상)", type="password", key="signup_pw")
+            new_pw2     = st.text_input("비밀번호 확인", type="password", key="signup_pw2")
+
             if st.button("회원가입", type="primary", use_container_width=True):
-                if not new_id or not new_email or not new_pw or not new_pw2:
+                if not all([new_id, new_stunum, new_name, new_email, new_pw, new_pw2]):
                     st.error("모든 항목을 입력하세요.")
                 elif not re.match(r'^[a-zA-Z0-9]{4,20}$', new_id):
                     st.error("아이디는 영문/숫자 4~20자로 입력하세요.")
+                elif not new_stunum.isdigit():
+                    st.error("학번은 숫자만 입력하세요.")
                 elif not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', new_email):
                     st.error("올바른 이메일 주소를 입력하세요.")
                 elif len(new_pw) < 6:
@@ -178,11 +183,15 @@ if not st.session_state.logged_in:
                         st.error("❌ 이미 존재하는 아이디입니다.")
                     elif any(u.get('email') == new_email for u in users.values()):
                         st.error("❌ 이미 사용 중인 이메일입니다.")
+                    elif any(u.get('student_num') == new_stunum for u in users.values()):
+                        st.error("❌ 이미 등록된 학번입니다.")
                     else:
                         users[new_id] = {
-                            'password':   hash_password(new_pw),
-                            'email':      new_email,
-                            'created_at': time.strftime('%Y-%m-%d %H:%M:%S')
+                            'password':    hash_password(new_pw),
+                            'email':       new_email,
+                            'student_num': new_stunum,
+                            'name':        new_name,
+                            'created_at':  time.strftime('%Y-%m-%d %H:%M:%S')
                         }
                         save_users(users)
                         st.success(f"✅ '{new_id}' 가입 완료! 로그인하세요.")
@@ -191,7 +200,7 @@ if not st.session_state.logged_in:
             find_tab1, find_tab2 = st.tabs(["👤 아이디 찾기", "🔑 비밀번호 찾기"])
             with find_tab1:
                 st.markdown("가입 시 등록한 이메일을 입력하면 아이디를 보내드려요.")
-                find_id_email = st.text_input("이메일 주소", key="find_id_email", placeholder="example@gmail.com")
+                find_id_email = st.text_input("이메일 주소", key="find_id_email")
                 if st.button("아이디 찾기", type="primary", use_container_width=True, key="btn_find_id"):
                     if not find_id_email:
                         st.error("이메일을 입력하세요.")
@@ -207,7 +216,7 @@ if not st.session_state.logged_in:
                             st.error("❌ 해당 이메일로 가입된 계정이 없습니다.")
             with find_tab2:
                 st.markdown("가입 시 등록한 이메일을 입력하면 임시 비밀번호를 보내드려요.")
-                find_pw_email = st.text_input("이메일 주소", key="find_pw_email", placeholder="example@gmail.com")
+                find_pw_email = st.text_input("이메일 주소", key="find_pw_email")
                 if st.button("임시 비밀번호 발급", type="primary", use_container_width=True, key="btn_find_pw"):
                     if not find_pw_email:
                         st.error("이메일을 입력하세요.")
@@ -248,7 +257,6 @@ else:
     st.divider()
 
     col1, col2, col3 = st.columns(3)
-
     with col1:
         st.markdown("""
         ### 🧠 인공지능 기초
@@ -258,7 +266,6 @@ else:
         - AI 윤리와 사회적 영향
         """)
         st.page_link("pages/1_인공지능기초.py", label="📖 인공지능 기초 학습하기", use_container_width=True)
-
     with col2:
         st.markdown("""
         ### 🔍 비전 AI (인공지능 실무)
@@ -268,7 +275,6 @@ else:
         - YOLO 모델 실습
         """)
         st.page_link("pages/2_비전AI.py", label="📖 비전AI 학습하기", use_container_width=True)
-
     with col3:
         st.markdown("""
         ### 📊 데이터 과학
