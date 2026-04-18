@@ -17,8 +17,8 @@ USERS_FILE       = "users.json"
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-@st.cache_resource
 def get_drive_service():
+    """매번 새로운 서비스 객체 생성 (SSL 오류 방지)"""
     info = st.secrets["google_oauth"]
     creds = Credentials(
         token=None,
