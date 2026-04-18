@@ -35,7 +35,31 @@ def get_drive_service():
         creds.refresh(Request())
     return build('drive', 'v3', credentials=creds)
 
-def load_users():
+LABELS_FILE = "labels.json"
+
+def load_labels():
+    svc = get_drive_service()
+    query = f"name='{LABELS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
+    files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
+    if not files:
+        return ["vicpie"]
+    data = svc.files().get_media(fileId=files[0]['id']).execute()
+    return json.loads(data.decode('utf-8'))
+
+def save_labels(labels_list):
+    svc = get_drive_service()
+    content = json.dumps(labels_list, ensure_ascii=False, indent=2).encode('utf-8')
+    media = MediaInMemoryUpload(content, mimetype='application/json')
+    query = f"name='{LABELS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
+    files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
+    if files:
+        svc.files().update(fileId=files[0]['id'], media_body=media).execute()
+    else:
+        svc.files().create(
+            body={'name': LABELS_FILE, 'parents': [SYSTEM_FOLDER_ID]},
+            media_body=media
+        ).execute()
+
     svc = get_drive_service()
     query = f"name='{USERS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
     files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
@@ -131,7 +155,57 @@ def extract_val_data(ratio=0.2):
 st.title("👑 관리자 페이지")
 st.divider()
 
-tab_users, tab_data, tab_val = st.tabs(["👥 회원 관리", "🖼️ 데이터 관리", "🔬 검증 데이터 추출"])
+tab_users, tab_data, tab_val, tab_labels = st.tabs(["👥 회원 관리", "🖼️ 데이터 관리", "🔬 검증 데이터 추출", "🏷️ 라벨 관리"])
+
+# ════════ 탭4: 라벨 관리 ════════
+with tab_labels:
+    st.subheader("🏷️ 라벨 목록 관리")
+    st.info("여기서 설정한 라벨이 학생 라벨링 화면에 표시됩니다.")
+
+    current_labels = load_labels()
+
+    # 현재 라벨 목록
+    st.markdown("**현재 라벨 목록:**")
+    for i, label in enumerate(current_labels):
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.write(f"**{i+1}.** {label}")
+        with col2:
+            if st.button("🗑️ 삭제", key=f"del_label_{i}"):
+                current_labels.pop(i)
+                save_labels(current_labels)
+                st.success(f"'{label}' 삭제!")
+                st.rerun()
+
+    st.divider()
+
+    # 새 라벨 추가
+    st.markdown("**새 라벨 추가:**")
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        new_label = st.text_input("라벨 이름 입력", placeholder="예: apple, vicpie, 사과 ...", key="new_label_input")
+    with col2:
+        st.write("")
+        st.write("")
+        if st.button("➕ 추가", type="primary"):
+            if new_label:
+                if new_label in current_labels:
+                    st.error("이미 존재하는 라벨입니다!")
+                else:
+                    current_labels.append(new_label)
+                    save_labels(current_labels)
+                    st.success(f"✅ '{new_label}' 추가 완료!")
+                    st.rerun()
+            else:
+                st.error("라벨 이름을 입력하세요.")
+
+    st.divider()
+    # 전체 초기화
+    if st.button("🗑️ 전체 초기화", type="secondary"):
+        save_labels([])
+        st.success("전체 라벨 초기화 완료!")
+        st.rerun()
+
 
 # ════════ 탭1: 회원 관리 ════════
 with tab_users:
