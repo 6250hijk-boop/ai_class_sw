@@ -330,10 +330,18 @@ with tab3:
 
     with st.sidebar:
         st.subheader("⚙️ 라벨 설정")
-        new_label = st.text_input("라벨 이름", value=st.session_state.vision_labels[0])
-        if st.button("적용"):
-            st.session_state.vision_labels[0] = new_label
-            st.rerun()
+
+        # 기본 제공 라벨 목록 + 직접 입력
+        DEFAULT_LABELS = ["apple", "orange", "banana", "grape", "strawberry", "기타"]
+        label_choice = st.selectbox("라벨 선택", DEFAULT_LABELS + ["✏️ 직접 입력"])
+        if label_choice == "✏️ 직접 입력":
+            custom_label = st.text_input("직접 입력", placeholder="라벨명 입력")
+            if custom_label:
+                st.session_state.vision_labels[0] = custom_label
+        else:
+            st.session_state.vision_labels[0] = label_choice
+
+        st.info(f"현재 라벨: **{st.session_state.vision_labels[0]}**")
         st.divider()
         st.markdown("""
         **📌 라벨링 방법**
@@ -343,12 +351,10 @@ with tab3:
         4. 박스가 자동으로 그려져요 🟩
         5. 저장 버튼을 누르세요 💾
         """)
-        # 마지막 박스 취소 버튼
         if st.session_state.temp_boxes:
             if st.button("↩️ 마지막 박스 취소"):
                 st.session_state.temp_boxes.pop()
                 st.rerun()
-        # 전체 초기화
         if st.button("🗑️ 전체 초기화"):
             st.session_state.temp_boxes = []
             st.session_state.click_coords = []
@@ -439,7 +445,6 @@ with tab4:
     st.header("🤖 AI 모델 분석 실습")
     model = load_yolo_model()
     if model:
-        # 모델 정보 표시
         with st.expander("🔎 모델 정보 확인"):
             st.write(f"**클래스 목록:** {model.names}")
             st.write(f"**클래스 수:** {len(model.names)}")
@@ -447,27 +452,49 @@ with tab4:
         test_file = st.file_uploader("분석할 이미지", type=['jpg','jpeg','png'])
         if test_file:
             img_pil = Image.open(test_file).convert("RGB")
-            st.image(img_pil, caption="업로드된 이미지", use_column_width=True)
+            st.image(img_pil, caption="업로드된 이미지", width=400)
 
             conf_val = st.slider("신뢰도 임계값 (낮을수록 더 많이 검출)", 0.01, 0.9, 0.25, 0.01)
 
             if st.button("🚀 분석 시작"):
                 with st.spinner("🤖 AI가 이미지를 분석 중입니다..."):
-                    results = model.predict(img_pil.resize((640,640)), conf=conf_val)
-                    res = results[0]
-                    col1, col2 = st.columns([2,1])
-                    with col1:
-                        st.image(res.plot(), channels="BGR", use_column_width=True)
-                    with col2:
-                        st.write(f"**신뢰도 임계값:** {conf_val}")
-                        st.write(f"**검출 수:** {len(res.boxes)}")
-                        if len(res.boxes) > 0:
-                            st.success(f"✅ {len(res.boxes)}개 검출!")
-                            for i, box in enumerate(res.boxes):
-                                label = model.names[int(box.cls[0])]
-                                conf  = float(box.conf[0]) * 100
-                                st.info(f"**{i+1}. {label}**: {conf:.1f}%")
-                                st.progress(conf/100)
-                        else:
-                            st.warning("검출된 사물이 없습니다.")
-                            st.info("💡 신뢰도 임계값을 더 낮춰보세요 (예: 0.05)")
+                    try:
+                        img_input = img_pil.resize((640, 640))
+                        results = model.predict(img_input, conf=conf_val, verbose=False)
+                        res = results[0]
+
+                        # res.plot() 대신 PIL로 직접 박스 그리기 (Segfault 방지)
+                        img_result = img_input.copy()
+                        draw = ImageDraw.Draw(img_result)
+                        boxes = res.boxes
+
+                        col1, col2 = st.columns([2, 1])
+                        with col1:
+                            if len(boxes) > 0:
+                                for box in boxes:
+                                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                                    label = model.names[int(box.cls[0])]
+                                    conf  = float(box.conf[0])
+                                    # 박스 그리기
+                                    draw.rectangle([x1, y1, x2, y2], outline="#00FF00", width=3)
+                                    # 라벨 배경
+                                    label_text = f"{label} {conf*100:.0f}%"
+                                    draw.rectangle([x1, y1-22, x1+len(label_text)*8, y1], fill="#00FF00")
+                                    draw.text((x1+2, y1-20), label_text, fill="black")
+                            st.image(img_result, width=400)
+
+                        with col2:
+                            st.write(f"**신뢰도 임계값:** {conf_val}")
+                            st.write(f"**검출 수:** {len(boxes)}")
+                            if len(boxes) > 0:
+                                st.success(f"✅ {len(boxes)}개 검출!")
+                                for i, box in enumerate(boxes):
+                                    label = model.names[int(box.cls[0])]
+                                    conf  = float(box.conf[0]) * 100
+                                    st.info(f"**{i+1}. {label}**: {conf:.1f}%")
+                                    st.progress(conf / 100)
+                            else:
+                                st.warning("검출된 사물이 없습니다.")
+                                st.info("💡 신뢰도 임계값을 더 낮춰보세요 (예: 0.05)")
+                    except Exception as e:
+                        st.error(f"❌ 분석 오류: {e}")
