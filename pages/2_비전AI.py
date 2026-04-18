@@ -11,22 +11,22 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 import io
 import re
+import json
 
-# ── 폴더 ID ──
 SYSTEM_FOLDER_ID = "1_zMtw7RDvOAZ3P7o2rNCKeO4DhKdZ3nv"
 TRAIN_IMG_ID     = "1vAmEqTkOfI7GELAOYBSknv0zhMX00RPv"
 TRAIN_LBL_ID     = "1WarT3vOu4alUk-g_262yhTI_unSew7cR"
+USERS_FILE       = "users.json"
 BEST_PT_NAME     = "best.pt"
 
 st.set_page_config(page_title="비전AI", page_icon="🔍", layout="wide")
 check_login()
 
-YOLO = None
+YOLO_AVAILABLE = False
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
 except Exception as e:
-    YOLO_AVAILABLE = False
     YOLO_ERROR = str(e)
 
 @st.cache_resource
@@ -66,14 +66,32 @@ def get_best_pt_id():
     files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
     return files[0]['id'] if files else None
 
-def get_user_images(username):
+def load_users():
     svc = get_drive_service()
-    query = f"'{TRAIN_IMG_ID}' in parents and name contains '{username}_data' and trashed=false"
+    query = f"name='{USERS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
+    files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
+    if not files:
+        return {}
+    data = svc.files().get_media(fileId=files[0]['id']).execute()
+    return json.loads(data.decode('utf-8'))
+
+def get_file_prefix(username):
+    """학번_이름 prefix 생성"""
+    users = load_users()
+    if username in users:
+        stunum = users[username].get('student_num', username)
+        name   = users[username].get('name', username)
+        return f"{stunum}_{name}"
+    return username
+
+def get_user_images(prefix):
+    svc = get_drive_service()
+    query = f"'{TRAIN_IMG_ID}' in parents and name contains '{prefix}_data' and trashed=false"
     return svc.files().list(q=query, fields="files(id, name)").execute().get('files', [])
 
-def upload_images(files, username):
+def upload_images(files, prefix):
     svc = get_drive_service()
-    query = f"'{TRAIN_IMG_ID}' in parents and name contains '{username}_data' and trashed=false"
+    query = f"'{TRAIN_IMG_ID}' in parents and name contains '{prefix}_data' and trashed=false"
     existing = svc.files().list(q=query, fields="files(name)").execute().get('files', [])
     indices = [int(re.search(r'data(\d+)', f['name']).group(1)) for f in existing if re.search(r'data(\d+)', f['name'])]
     idx = max(indices) + 1 if indices else 1
@@ -82,8 +100,9 @@ def upload_images(files, username):
         img = Image.open(f).convert("RGB").resize((640, 640), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=95)
+        fname = f"{prefix}_data{idx}.jpg"
         svc.files().create(
-            body={'name': f"{username}_data{idx}.jpg", 'parents': [TRAIN_IMG_ID]},
+            body={'name': fname, 'parents': [TRAIN_IMG_ID]},
             media_body=MediaInMemoryUpload(buf.getvalue(), mimetype='image/jpeg')
         ).execute()
         idx += 1
@@ -116,7 +135,6 @@ for key, val in {
 
 username = get_username()
 
-# ── UI ──
 st.title("🔍 비전 AI")
 st.markdown(f"👤 **{username}**")
 st.divider()
@@ -126,36 +144,18 @@ tab1, tab2, tab3, tab4 = st.tabs(["📖 이론 학습", "📝 퀴즈", "📸 데
 # ════════ 탭1: 이론 ════════
 with tab1:
     st.header("📖 비전 AI 이론")
-
     with st.expander("1️⃣ 컴퓨터 비전이란?", expanded=True):
-        st.markdown("""
-        **컴퓨터 비전(Computer Vision)** 은 컴퓨터가 이미지나 영상을 이해하고 분석하는 기술입니다.
-
-        > ✏️ **여기에 이론 내용을 추가하세요**
-        > - 개념 설명
-        > - 예시 이미지
-        > - 동영상 링크 등
-        """)
-
+        st.markdown("> ✏️ **여기에 이론 내용을 추가하세요**")
     with st.expander("2️⃣ 객체 탐지(Object Detection)란?"):
-        st.markdown("""
-        > ✏️ **여기에 이론 내용을 추가하세요**
-        """)
-
+        st.markdown("> ✏️ **여기에 이론 내용을 추가하세요**")
     with st.expander("3️⃣ YOLO 모델이란?"):
-        st.markdown("""
-        > ✏️ **여기에 이론 내용을 추가하세요**
-        """)
-
+        st.markdown("> ✏️ **여기에 이론 내용을 추가하세요**")
     with st.expander("4️⃣ 데이터 수집과 라벨링"):
-        st.markdown("""
-        > ✏️ **여기에 이론 내용을 추가하세요**
-        """)
+        st.markdown("> ✏️ **여기에 이론 내용을 추가하세요**")
 
 # ════════ 탭2: 퀴즈 ════════
 with tab2:
     st.header("📝 비전AI 퀴즈")
-
     QUIZZES = [
         {
             "q": "컴퓨터 비전에서 이미지 안의 물체를 찾고 위치를 표시하는 기술은?",
@@ -165,12 +165,7 @@ with tab2:
         },
         {
             "q": "YOLO는 무엇의 약자인가요?",
-            "options": [
-                "You Only Look Once",
-                "Your Object Looks Obvious",
-                "Yellow Orange Light Output",
-                "You Only Learn Once"
-            ],
+            "options": ["You Only Look Once", "Your Object Looks Obvious", "Yellow Orange Light Output", "You Only Learn Once"],
             "answer": "You Only Look Once",
             "explain": "YOLO는 'You Only Look Once'의 약자로, 이미지를 한 번만 보고 빠르게 객체를 탐지하는 모델입니다."
         },
@@ -178,13 +173,9 @@ with tab2:
             "q": "AI 모델을 학습시키기 위해 이미지에 물체의 위치를 표시하는 작업은?",
             "options": ["전처리", "라벨링", "증강", "추론"],
             "answer": "라벨링",
-            "explain": "라벨링(Labeling)은 AI가 학습할 수 있도록 이미지에 정답(물체의 위치, 종류)을 표시하는 작업입니다."
+            "explain": "라벨링(Labeling)은 AI가 학습할 수 있도록 이미지에 정답을 표시하는 작업입니다."
         },
     ]
-
-    if "quiz_results" not in st.session_state:
-        st.session_state.quiz_results = {}
-
     score = 0
     for i, quiz in enumerate(QUIZZES):
         st.markdown(f"**Q{i+1}. {quiz['q']}**")
@@ -196,31 +187,30 @@ with tab2:
             else:
                 st.error(f"❌ 오답! 정답은 **{quiz['answer']}** 입니다. {quiz['explain']}")
         st.divider()
-
     answered = sum(1 for i in range(len(QUIZZES)) if st.session_state.get(f"quiz_{i}"))
     if answered == len(QUIZZES):
         st.markdown(f"### 🎯 최종 점수: {score} / {len(QUIZZES)}")
         if score == len(QUIZZES):
             st.balloons()
-            st.success("🎉 만점입니다!")
 
 # ════════ 탭3: 데이터 수집 ════════
 with tab3:
     st.header("📸 학습 데이터 수집")
-    st.info(f"📁 저장: train/images/{username}_data*.jpg")
+    prefix = get_file_prefix(username)
+    st.info(f"📁 저장 파일명: `{prefix}_data*.jpg`")
 
     upload_tab1, upload_tab2 = st.tabs(["🖼️ 갤러리", "📷 카메라"])
     with upload_tab1:
         gallery_files = st.file_uploader("사진 선택", type=['jpg','jpeg','png'], accept_multiple_files=True)
         if st.button("📤 업로드", key="gallery_up") and gallery_files:
             with st.spinner("업로드 중..."):
-                count = upload_images(gallery_files, username)
+                count = upload_images(gallery_files, prefix)
             st.success(f"🎉 {count}장 완료!")
     with upload_tab2:
         cam = st.camera_input("사진 찍기")
         if cam and st.button("📤 업로드", key="cam_up"):
             with st.spinner("업로드 중..."):
-                count = upload_images([cam], username)
+                count = upload_images([cam], prefix)
             st.success(f"🎉 {count}장 완료!")
 
     st.divider()
@@ -231,13 +221,12 @@ with tab3:
             st.session_state.vision_labels[0] = new_label
             st.rerun()
 
-    items = get_user_images(username)
+    items = get_user_images(prefix)
     if not items:
         st.info("업로드된 사진이 없습니다.")
     else:
         target = st.selectbox("라벨링할 사진 선택", [i['name'] for i in items])
         tid = [i['id'] for i in items if i['name'] == target][0]
-
         if st.button("📥 사진 불러오기"):
             st.session_state.temp_boxes = []
             st.session_state.click_coords = []
