@@ -60,6 +60,7 @@ def save_labels(labels_list):
             media_body=media
         ).execute()
 
+def load_users():
     svc = get_drive_service()
     query = f"name='{USERS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
     files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
