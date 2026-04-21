@@ -192,23 +192,85 @@ with tab2:
             st.rerun()
 
 # ════════ 탭3: 실습 ════════
+# ════════ 탭3: 실습 (시각화 및 시뮬레이션 강화) ════════
 with tab3:
-    st.header("💻 간단 AI 체험")
-    st.write("에포크(학습 횟수)를 조절하며 AI의 마음을 이해해 봅시다.")
-    
-    epochs = st.slider("학습 횟수(Epochs)를 설정해 보세요", 1, 100, 10)
-    
-    if epochs < 10:
-        st.warning(f"에포크 {epochs}: 아직 공부가 부족해요! (과소적합 위험)")
-    elif epochs > 80:
-        st.error(f"에포크 {epochs}: 너무 정답을 외우고 있어요! (과적합 위험)")
-    else:
-        st.success(f"에포크 {epochs}: 적절하게 공부하고 있습니다! (정상 학습)")
-    
+    st.header("💻 인공지능 훈련소: 에포크 체험하기")
     st.markdown("""
-    ---
-    **실제 실습 가이드:**
-    1. **Teachable Machine**에 접속합니다.
-    2. 지도학습을 이용해 나의 얼굴과 손동작을 학습시켜 봅니다.
-    3. 학습이 완료된 후 AI가 나를 잘 알아보는지 확인해 봅시다.
+    인공지능이 문제집(데이터)을 몇 번 반복해서 풀지 결정하는 것을 **'에포크(Epoch)'**라고 해요.
+    학습 횟수를 조절하며 인공지능의 실력이 어떻게 변하는지 관찰해 봅시다!
     """)
+
+    # 1. 시뮬레이션 설정 (슬라이더)
+    epochs = st.slider("학습 횟수(Epochs)를 설정해 보세요", 1, 100, 50)
+    
+    col1, col2 = st.columns([1, 1])
+
+    # 2. AI 상태 시각화 및 피드백
+    with col1:
+        st.subheader("🤖 AI의 마음 상태")
+        
+        if epochs < 20:
+            st.warning("🥱 **상태: 졸음 (과소적합)**")
+            st.write("공부량이 너무 적어요! 문제집을 한두 번 훑어만 봐서 아무것도 모르는 상태예요.")
+            progress_val = 20
+            brain_emoji = "💤"
+        elif epochs <= 75:
+            st.success("🤓 **상태: 열공 (정상 학습)**")
+            st.write("적당히 공부했어요! 원리를 이해하기 시작해서 새로운 문제가 나와도 잘 풀 수 있어요.")
+            progress_val = 85
+            brain_emoji = "💡"
+        else:
+            st.error("😵 **상태: 멘붕 (과적합)**")
+            st.write("공부를 너무 많이 해서 문제집의 정답을 통째로 외워버렸어요! 응용력이 하나도 없어요.")
+            progress_val = 95
+            brain_emoji = "😵‍💫"
+
+        st.progress(progress_val)
+        st.markdown(f"<div style='font-size: 80px; text-align: center;'>{brain_emoji}</div>", unsafe_allow_html=True)
+
+    # 3. 실시간 성능 그래프 시뮬레이션
+    with col2:
+        st.subheader("📈 실력 변화 그래프")
+        
+        # 그래프 데이터 시뮬레이션 (학습 횟수에 따른 정확도 변화)
+        import pandas as pd
+        import numpy as np
+
+        x = np.arange(1, 101)
+        # 공부한 문제(Train)는 계속 점수가 오름
+        train_acc = 100 * (1 - np.exp(-x / 15))
+        # 새로운 문제(Val)는 중간에 정점을 찍고 과적합 때문에 떨어짐
+        val_acc = train_acc * (1 - (x - 45)**2 / 4000) 
+        
+        chart_data = pd.DataFrame({
+            '공부한 문제 (정확도)': train_acc[:epochs],
+            '새로운 실전 문제 (정확도)': val_acc[:epochs]
+        })
+        
+        st.line_chart(chart_data)
+        st.caption("파란선은 공부한 문제집 점수, 주황선은 실제 실력(실전 점수)이에요.")
+
+    st.divider()
+
+    # 4. 단계별 실습 가이드 (Teachable Machine)
+    st.header("📸 실제 AI 만들어보기")
+    st.write("구글의 'Teachable Machine'을 이용해 나만의 인공지능을 직접 훈련시켜 봐요.")
+    
+    step_col1, step_col2, step_col3 = st.columns(3)
+    
+    with step_col1:
+        with st.expander("1단계: 준비하기", expanded=True):
+            st.write("웹캠이 있는 컴퓨터에서 [Teachable Machine](https://teachablemachine.withgoogle.com/)에 접속하세요.")
+            st.write("'이미지 프로젝트'를 선택합니다.")
+            
+    with step_col2:
+        with st.expander("2단계: 데이터 모으기", expanded=True):
+            st.write("'가위', '바위', '보'처럼 분류하고 싶은 동작을 각각 촬영해서 입력하세요.")
+            st.write("이게 바로 **지도학습**의 데이터 수집이에요!")
+
+    with step_col3:
+        with st.expander("3단계: 학습 및 확인", expanded=True):
+            st.write("'학습(Train)' 버튼을 누르세요. 이때 오른쪽 상단의 설정을 눌러 **에포크**를 바꿔볼 수도 있어요!")
+            st.write("학습 후 카메라에 손을 대보고 AI가 잘 맞히는지 확인하세요.")
+
+    st.success("💡 **실습 팁:** 에포크를 1로 하면 AI가 나를 잘 못 알아보지만(과소적합), 너무 크게 하면 조금만 움직여도 엉뚱한 답을 할 수 있어요(과적합)!")
