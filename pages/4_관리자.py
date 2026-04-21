@@ -150,13 +150,90 @@ def extract_val_data(ratio=0.2):
             copied_lbls += 1
     return copied_imgs, copied_lbls
 
+QUIZ_RESULTS_FILE = "quiz_results.json"
+
+def load_quiz_results():
+    try:
+        svc = get_drive_service()
+        query = f"name='{QUIZ_RESULTS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
+        files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
+        if not files:
+            return {}
+        data = svc.files().get_media(fileId=files[0]['id']).execute()
+        return json.loads(data.decode('utf-8'))
+    except:
+        return {}
+
 # ════════════════════════════════════════════
 #  UI
 # ════════════════════════════════════════════
 st.title("👑 관리자 페이지")
 st.divider()
 
-tab_users, tab_data, tab_val, tab_labels = st.tabs(["👥 회원 관리", "🖼️ 데이터 관리", "🔬 검증 데이터 추출", "🏷️ 라벨 관리"])
+tab_users, tab_data, tab_val, tab_labels, tab_quiz = st.tabs([
+    "👥 회원 관리", "🖼️ 데이터 관리", "🔬 검증 데이터 추출", "🏷️ 라벨 관리", "📝 퀴즈 현황"
+])
+
+# ════════ 탭5: 퀴즈 현황 ════════
+with tab_quiz:
+    st.subheader("📝 학생별 퀴즈 현황")
+
+    quiz_results = load_quiz_results()
+    users = load_users()
+
+    if not quiz_results:
+        st.info("아직 퀴즈를 푼 학생이 없습니다.")
+    else:
+        # 전체 통계
+        total_attempts = sum(
+            len(attempts)
+            for user_data in quiz_results.values()
+            for attempts in user_data.values()
+        )
+        st.metric("전체 퀴즈 응시 횟수", f"{total_attempts}회")
+        st.divider()
+
+        # 학생별 결과
+        for uid, quiz_data in quiz_results.items():
+            # 학번/이름 가져오기
+            user_info = users.get(uid, {})
+            stunum = user_info.get('student_num', '-')
+            name   = user_info.get('name', uid)
+
+            with st.expander(f"🎓 {stunum} | {name} | {uid}"):
+                for quiz_name, attempts in quiz_data.items():
+                    st.markdown(f"**📋 {quiz_name}**")
+
+                    # 시도 횟수, 최고점, 평균점
+                    scores     = [a['score'] for a in attempts]
+                    totals     = [a['total'] for a in attempts]
+                    best_score = max(scores)
+                    best_total = totals[scores.index(best_score)]
+                    avg_score  = sum(scores) / len(scores)
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("응시 횟수", f"{len(attempts)}회")
+                    col2.metric("최고 점수", f"{best_score}/{best_total}")
+                    col3.metric("평균 점수", f"{avg_score:.1f}점")
+                    col4.metric("최고 점수(%)", f"{int(best_score/best_total*100)}%")
+
+                    # 응시 기록
+                    st.markdown("**응시 기록:**")
+                    for j, attempt in enumerate(reversed(attempts)):
+                        pct = int(attempt['score'] / attempt['total'] * 100)
+                        color = "🟢" if pct >= 80 else "🟡" if pct >= 60 else "🔴"
+                        st.caption(
+                            f"{color} {attempt['date']} | "
+                            f"{attempt['score']}/{attempt['total']}점 ({pct}%) | "
+                            f"틀린 문제: {len(attempt.get('wrong', []))}개"
+                        )
+                        # 틀린 문제 보기
+                        if attempt.get('wrong'):
+                            with st.expander(f"❌ 틀린 문제 보기 ({attempt['date']})", expanded=False):
+                                for wrong_q in attempt['wrong']:
+                                    st.write(f"• {wrong_q}")
+                    st.divider()
+
 
 # ════════ 탭4: 라벨 관리 ════════
 with tab_labels:
