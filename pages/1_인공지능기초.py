@@ -196,7 +196,7 @@ with tab2:
 with tab3:
     st.header("💻 인공지능 훈련소: 에포크 체험하기")
     st.markdown("""
-    인공지능이 문제집(데이터)을 몇 번 반복해서 풀지 결정하는 것을 **'에포크(Epoch)'**라고 해요.
+    인공지능이 문제집(데이터)을 몇 번 반복해서 풀지 결정하는 것을 '에포크(Epoch)'라고 해요.
     학습 횟수를 조절하며 인공지능의 실력이 어떻게 변하는지 관찰해 봅시다!
     """)
 
@@ -210,17 +210,17 @@ with tab3:
         st.subheader("🤖 AI의 마음 상태")
         
         if epochs < 20:
-            st.warning("🥱 **상태: 졸음 (과소적합)**")
+            st.warning("🥱 상태: 졸음 (과소적합)")
             st.write("공부량이 너무 적어요! 문제집을 한두 번 훑어만 봐서 아무것도 모르는 상태예요.")
             progress_val = 20
             brain_emoji = "💤"
         elif epochs <= 75:
-            st.success("🤓 **상태: 열공 (정상 학습)**")
+            st.success("🤓 상태: 열공 (정상 학습)")
             st.write("적당히 공부했어요! 원리를 이해하기 시작해서 새로운 문제가 나와도 잘 풀 수 있어요.")
             progress_val = 85
             brain_emoji = "💡"
         else:
-            st.error("😵 **상태: 멘붕 (과적합)**")
+            st.error("😵 상태: 멘붕 (과적합)")
             st.write("공부를 너무 많이 해서 문제집의 정답을 통째로 외워버렸어요! 응용력이 하나도 없어요.")
             progress_val = 95
             brain_emoji = "😵‍💫"
@@ -248,7 +248,7 @@ with tab3:
         })
         
         st.line_chart(chart_data)
-        st.caption("파란선은 공부한 문제집 점수, 주황선은 실제 실력(실전 점수)이에요.")
+        st.caption("파란선은 공부한 문제집 점수, 주황선은 실제 실력(실전 점수)이에요. (학습시킬 데이터에 따라 적당한 에포크 양이 결정되요!)")
 
     st.divider()
 
@@ -266,11 +266,11 @@ with tab3:
     with step_col2:
         with st.expander("2단계: 데이터 모으기", expanded=True):
             st.write("'가위', '바위', '보'처럼 분류하고 싶은 동작을 각각 촬영해서 입력하세요.")
-            st.write("이게 바로 **지도학습**의 데이터 수집이에요!")
+            st.write("이게 바로 지도학습의 데이터 수집이에요!")
 
     with step_col3:
         with st.expander("3단계: 학습 및 확인", expanded=True):
-            st.write("'학습(Train)' 버튼을 누르세요. 이때 오른쪽 상단의 설정을 눌러 **에포크**를 바꿔볼 수도 있어요!")
+            st.write("'학습(Train)' 버튼을 누르세요. 이때 오른쪽 상단의 설정을 눌러 에포크를 바꿔볼 수도 있어요!")
             st.write("학습 후 카메라에 손을 대보고 AI가 잘 맞히는지 확인하세요.")
 
     st.success("💡 **실습 팁:** 에포크를 1로 하면 AI가 나를 잘 못 알아보지만(과소적합), 너무 크게 하면 조금만 움직여도 엉뚱한 답을 할 수 있어요(과적합)!")
