@@ -2,21 +2,20 @@ import streamlit as st
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.auth import check_login, get_username
-from google.oauth2.credentials import Credentials
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.firebase import get_db
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 import json
 import time
 
-st.set_page_config(page_title="인공지능 기초 학습", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="인공지능기초", page_icon="🧠", layout="wide")
 check_login()
 username = get_username()
 
-SYSTEM_FOLDER_ID  = "1_zMtw7RDvOAZ3P7o2rNCKeO4DhKdZ3nv"
-QUIZ_RESULTS_FILE = "quiz_results.json"
 
-# ── 구글 드라이브 서비스 설정 ──
 def get_drive_service():
     info = st.secrets["google_oauth"]
     creds = Credentials(
@@ -31,248 +30,227 @@ def get_drive_service():
         creds.refresh(Request())
     return build('drive', 'v3', credentials=creds)
 
-def load_quiz_results():
-    try:
-        svc = get_drive_service()
-        query = f"name='{QUIZ_RESULTS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
-        files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
-        if not files: return {}
-        data = svc.files().get_media(fileId=files[0]['id']).execute()
-        return json.loads(data.decode('utf-8'))
-    except: return {}
-
 def save_quiz_result(username, quiz_name, score, total, wrong_list):
     try:
-        svc = get_drive_service()
-        results = load_quiz_results()
-        if username not in results: results[username] = {}
-        if quiz_name not in results[username]: results[username][quiz_name] = []
+        db = get_db()
+        doc_ref = db.collection("quiz_results").document(username)
+        doc = doc_ref.get()
+        results = doc.to_dict() if doc.exists else {}
 
-        results[username][quiz_name].append({
-            "score": score, "total": total, "wrong": wrong_list,
+        if quiz_name not in results:
+            results[quiz_name] = []
+
+        results[quiz_name].append({
+            "score": score,
+            "total": total,
+            "wrong": wrong_list,
             "date": time.strftime('%Y-%m-%d %H:%M')
         })
-        content = json.dumps(results, ensure_ascii=False, indent=2).encode('utf-8')
-        media = MediaInMemoryUpload(content, mimetype='application/json')
-        query = f"name='{QUIZ_RESULTS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
-        files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
-        if files: svc.files().update(fileId=files[0]['id'], media_body=media).execute()
-        else: svc.files().create(body={'name': QUIZ_RESULTS_FILE, 'parents': [SYSTEM_FOLDER_ID]}, media_body=media).execute()
+        doc_ref.set(results)
         return True
     except Exception as e:
         st.error(f"결과 저장 실패: {e}")
         return False
 
-# ── 퀴즈 데이터 (이론 학습과 연동) ──
+# ── 퀴즈 데이터 ──
 QUIZZES = [
     {
-        "q": "컴퓨터에게 정답(라벨)이 포함된 데이터를 주고 학습시키는 방식은 무엇인가요?",
-        "options": ["비지도학습", "지도학습", "강화학습", "전이학습"],
+        "q": "머신러닝에서 정답이 붙은 데이터로 학습하는 방식은?",
+        "options": ["비지도학습", "지도학습", "강화학습", "딥러닝"],
         "answer": "지도학습",
-        "explain": "선생님이 정답을 알려주듯 학습시키는 방식이 '지도학습'입니다."
+        "explain": "지도학습은 정답(라벨)이 있는 데이터로 컴퓨터를 학습시키는 방식으로, 스팸 메일 분류나 이미지 분류 등에 사용됩니다."
     },
     {
-        "q": "정답 없이 데이터의 특징만을 보고 비슷한 것끼리 그룹을 만드는 방식은?",
-        "options": ["지도학습", "군집화(비지도학습)", "회귀 분석", "딥러닝"],
-        "answer": "군집화(비지도학습)",
-        "explain": "정답 없이 끼리끼리 묶는 방식을 비지도학습의 '군집화'라고 합니다."
+        "q": "정답 없이 비슷한 것끼리 묶는 머신러닝 방식은?",
+        "options": ["지도학습", "강화학습", "비지도학습", "전이학습"],
+        "answer": "비지도학습",
+        "explain": "비지도학습은 정답 없이 데이터의 패턴을 스스로 찾아 분류하는 방식으로, 넷플릭스 추천 시스템 등에 사용됩니다."
     },
     {
-        "q": "머신러닝 모델을 만들기 위한 5단계 과정 중 첫 번째 단계는?",
-        "options": ["모델 학습", "데이터 수집", "결과 평가", "인공지능 배포"],
+        "q": "머신러닝 모델 학습 과정에서 가장 먼저 해야 할 것은?",
+        "options": ["모델 배포", "데이터 수집", "모델 평가", "예측"],
         "answer": "데이터 수집",
-        "explain": "학습을 위한 재료인 '데이터'를 모으는 것이 가장 먼저 할 일입니다."
+        "explain": "모델 학습을 위해서는 먼저 충분한 데이터를 수집해야 합니다. 데이터가 없으면 학습 자체가 불가능합니다."
     },
     {
-        "q": "AI가 전체 학습 데이터를 한 번 다 훑어보는 학습 단위를 무엇이라 하나요?",
-        "options": ["Step", "Batch", "에포크(Epoch)", "Layer"],
-        "answer": "에포크(Epoch)",
-        "explain": "문제집 전체를 한 번 다 푸는 단위를 '에포크'라고 부릅니다."
+        "q": "에포크(Epoch)란 무엇인가요?",
+        "options": [
+            "모델의 크기",
+            "전체 데이터를 한 번 학습하는 단위",
+            "학습 속도",
+            "데이터의 양"
+        ],
+        "answer": "전체 데이터를 한 번 학습하는 단위",
+        "explain": "에포크는 AI가 전체 학습 데이터를 한 번 다 보는 것을 말해요. 100 에포크면 같은 데이터를 100번 반복 학습한 것입니다."
     },
     {
-        "q": "학습 데이터에만 너무 과하게 적응되어 새로운 데이터는 잘 못 맞히는 현상은?",
-        "options": ["과소적합", "정상학습", "과적합(Overfitting)", "정규화"],
+        "q": "모델이 학습 데이터에만 너무 맞춰져서 새로운 데이터에는 성능이 떨어지는 현상은?",
+        "options": ["과소적합", "과적합(Overfitting)", "정규화", "전처리"],
         "answer": "과적합(Overfitting)",
-        "explain": "문제집의 정답만 달달 외워서 응용력이 떨어지는 것을 '과적합'이라고 합니다."
+        "explain": "과적합은 모델이 학습 데이터만 외워버려 새로운 데이터에 잘 대응하지 못하는 현상입니다. 에포크가 너무 많거나 데이터가 적을 때 발생합니다."
     },
 ]
 
 # ── 세션 초기화 ──
-if "ml_answers" not in st.session_state: st.session_state.ml_answers = {}
-if "ml_submitted" not in st.session_state: st.session_state.ml_submitted = False
-if "ml_saved" not in st.session_state: st.session_state.ml_saved = False
+if "ml_answers" not in st.session_state:
+    st.session_state.ml_answers = {}
+if "ml_submitted" not in st.session_state:
+    st.session_state.ml_submitted = False
+if "ml_saved" not in st.session_state:
+    st.session_state.ml_saved = False
 
-# ── UI 시작 ──
-st.title("🧠 인공지능(AI) 기초 마스터")
-st.markdown(f"학생 이름: **{username}**")
+# ── UI ──
+st.title("🧠 인공지능 기초")
+st.markdown(f"👤 **{username}**")
+st.divider()
 
-tab1, tab2, tab3 = st.tabs(["📖 핵심 이론 공부", "📝 도전! 퀴즈", "💻 AI 체험"])
+tab1, tab2, tab3 = st.tabs(["📖 이론 학습", "📝 퀴즈", "💻 실습"])
 
-# ════════ 탭1: 이론 학습 ════════
+# ════════ 탭1: 이론 ════════
 with tab1:
-    st.header("📖 머신러닝의 기본 원리")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info("### 1. 지도학습 (정답이 있어요)\n"
-                "선생님이 **문제와 정답(라벨)**을 함께 보여주며 공부시키는 방법이에요.\n"
-                "- **사례:** 개/고양이 사진 분류, 스팸 메일 판별\n"
-                "- **포인트:** 정답을 보고 배우기 때문에 정확도가 높아요.")
-    with col2:
-        st.success("### 2. 비지도학습 (정답이 없어요)\n"
-                "정답 없이 데이터만 주고 **'비슷한 것끼리 묶어봐'**라고 시키는 방법이에요.\n"
-                "- **사례:** 넷플릭스 영화 추천, 고객 그룹 나누기\n"
-                "- **포인트:** 데이터 속에 숨겨진 규칙을 발견해요.")
+    st.header("📖 머신러닝 이론")
 
-    st.markdown("---")
-    st.subheader("🚀 인공지능이 만들어지는 5단계")
-    st.write("인공지능은 마치 학생이 시험을 준비하는 과정과 같아요!")
-    
-    steps = [
-        "**1단계: 데이터 수집** (공부할 문제집 모으기)",
-        "**2단계: 모델 학습** (문제집 열심히 풀며 공부하기)",
-        "**3단계: 모델 평가** (모의고사 풀어서 실력 확인하기)",
-        "**4단계: 평가 및 수정** (틀린 문제 분석하고 오답노트 쓰기)",
-        "**5단계: 배포** (실제 시험 보러 가기 / 서비스 출시)"
-    ]
-    for step in steps:
-        st.write(step)
+    with st.expander("1️⃣ 머신러닝이란?", expanded=True):
+        st.markdown("""
+머신러닝은 **'기계(Machine)가 스스로 학습(Learning)하는 것'** 을 말해요.
+사람이 규칙을 정해주는 대신, 컴퓨터에게 엄청나게 많은 데이터를 보여주면
+컴퓨터가 그 안에서 스스로 규칙을 찾아내는 기술이죠.
 
-    st.markdown("---")
-    st.subheader("⚠️ 인공지능 학습 용어 사전")
-    with st.expander("에포크(Epoch)란 무엇인가요?"):
-        st.write("문제집 전체를 **한 번 다 푼 것**을 의미해요. 에포크가 10이면 전체 문제를 10번 반복해서 학습했다는 뜻이죠.")
-    
-    with st.expander("과적합(Overfitting)이란 무엇인가요?"):
-        st.write("학습용 문제집의 정답을 통째로 외워버린 상태예요! 문제집은 100점 맞지만, 새로운 문제(실전)에서는 빵점을 맞는 현상이죠.\n만약, 내가 자동차를 찾고 싶은데 현대, 기아차로만 학습시켰어요.\n적당히 학습시키면 모든 차를 찾을 수 있지만 \n과적합이 되면 현대, 기아차만 차만 찾을 수 있게 되는거에요. ")
+요리법(레시피)을 하나하나 읽어주는 게 아니라, 수천 가지의 완성된 요리를 맛보게 해서
+컴퓨터가 스스로 "아, 설탕이 들어가면 달콤해지는구나!"라고 깨닫게 만드는 것과 같아요.
+        """)
+
+    with st.expander("2️⃣ 지도학습 vs 비지도학습"):
+        st.markdown("""
+**지도학습 (Supervised Learning): "정답지가 있는 공부"**
+
+선생님이 옆에서 문제와 정답을 같이 알려주며 공부시키는 방식이에요.
+- **학습법:** "이 사진은 강아지야", "이 사진은 고양이야"라고 이름(정답)이 붙은 사진을 수만 장 보여줍니다.
+- **결과:** 나중에 이름이 없는 새 사진을 보여주면, 컴퓨터가 "이건 99% 확률로 고양이네요!"라고 정답을 맞혀요.
+- **예시:** 스팸 메일 분류, 시험 합격/불합격 예측.
+
+---
+
+**비지도학습 (Unsupervised Learning): "정답 없이 끼리끼리 모으기"**
+
+정답을 알려주지 않고, 컴퓨터에게 **"비슷한 것끼리 한번 묶어봐"** 라고 시키는 방식이에요.
+- **학습법:** 과일이 잔뜩 섞인 바구니를 주고 이름은 안 알려줍니다.
+- **결과:** 사람이 알려주지 않은 새로운 특징이나 그룹을 찾아낼 때 유용해요.
+- **예시:** 넷플릭스의 비슷한 영화 추천, 비슷한 취미를 가진 사람들의 모임 찾기.
+        """)
+
+    with st.expander("3️⃣ 모델 학습 과정"):
+        st.markdown("""
+컴퓨터가 똑똑한 '모델'이 되는 과정은 우리가 기말고사를 준비하는 과정과 아주 비슷해요.
+
+1. **문제집 준비 (데이터 수집):** 공부할 문제들을 많이 모아요.
+2. **공부하기 (모델 학습):** 문제집을 열심히 풀면서 규칙을 찾아요.
+3. **모의고사 풀기 (예측/테스트):** 공부가 잘 됐는지 확인하기 위해 정답을 가리고 문제를 풀어봐요.
+4. **채점 및 오답노트 (평가 및 수정):** 틀린 문제를 분석하고, 규칙을 다시 수정해서 더 똑똑해지도록 반복해요.
+5. **실전 시험 (배포):** 충분히 똑똑해졌다면, 실제로 세상에 나가서 일을 시작해요.
+        """)
 
 # ════════ 탭2: 퀴즈 ════════
 with tab2:
-    st.header("📝 실력 확인 퀴즈")
-    if st.session_state.ml_submitted:
-        st.info("학습을 마쳤습니다. 결과를 확인하세요!")
-    else:
-        st.write("앞의 이론 내용을 잘 읽었다면 모두 맞힐 수 있어요!")
+    st.header("📝 머신러닝 퀴즈")
+    st.markdown(f"총 **{len(QUIZZES)}문제** — 모두 풀고 **정답 확인** 버튼을 누르세요!")
+    st.divider()
 
+    # 문제 표시
     for i, quiz in enumerate(QUIZZES):
         st.markdown(f"**Q{i+1}. {quiz['q']}**")
-        choice = st.radio("보기", quiz['options'], key=f"ml_q_{i}", index=None, 
-                          disabled=st.session_state.ml_submitted)
-        
-        if choice: st.session_state.ml_answers[i] = choice
 
+        # 제출 후엔 비활성화
+        disabled = st.session_state.ml_submitted
+        choice = st.radio(
+            "답을 선택하세요",
+            quiz['options'],
+            key=f"ml_quiz_{i}",
+            index=None,
+            disabled=disabled
+        )
+        if choice:
+            st.session_state.ml_answers[i] = choice
+
+        # 제출 후 정답/오답 표시
         if st.session_state.ml_submitted:
             if st.session_state.ml_answers.get(i) == quiz['answer']:
-                st.success("✅ 정답입니다!")
+                st.success(f"✅ 정답!")
             else:
-                st.error(f"❌ 오답입니다. (정답: {quiz['answer']})")
-                st.write(f"💡 해설: {quiz['explain']}")
+                st.error(f"❌ 오답! 정답: **{quiz['answer']}**")
+                st.info(f"💡 해설: {quiz['explain']}")
         st.divider()
 
+    # 정답 확인 버튼
     if not st.session_state.ml_submitted:
-        if st.button("제출하고 점수 확인", type="primary", use_container_width=True):
-            if len(st.session_state.ml_answers) < len(QUIZZES):
-                st.warning("모든 문제를 풀어주세요!")
-            else:
-                st.session_state.ml_submitted = True
-                st.rerun()
+        answered_count = len(st.session_state.ml_answers)
+        st.write(f"답변 완료: **{answered_count} / {len(QUIZZES)}**")
 
-    if st.session_state.ml_submitted:
-        score = sum(1 for i, q in enumerate(QUIZZES) if st.session_state.ml_answers.get(i) == q['answer'])
-        st.subheader(f"내 점수: {int(score/len(QUIZZES)*100)}점 ({score}/{len(QUIZZES)})")
-        
-        if not st.session_state.ml_saved:
-            save_quiz_result(username, "ML_기초", score, len(QUIZZES), [])
-            st.session_state.ml_saved = True
+        if answered_count < len(QUIZZES):
+            st.warning("⚠️ 모든 문제에 답해야 제출할 수 있어요!")
 
-        if st.button("다시 도전하기"):
-            st.session_state.ml_submitted = False
-            st.session_state.ml_answers = {}
+        if st.button("✅ 정답 확인", type="primary",
+                     use_container_width=True,
+                     disabled=answered_count < len(QUIZZES)):
+            st.session_state.ml_submitted = True
             st.session_state.ml_saved = False
             st.rerun()
 
-# ════════ 탭3: 실습 ════════
-# ════════ 탭3: 실습 (시각화 및 시뮬레이션 강화) ════════
-with tab3:
-    st.header("💻 인공지능 훈련소: 에포크 체험하기")
-    st.markdown("""
-    인공지능이 문제집(데이터)을 몇 번 반복해서 풀지 결정하는 것을 '에포크(Epoch)'라고 해요.
-    \n학습 횟수를 조절하며 인공지능의 실력이 어떻게 변하는지 관찰해 봅시다!
-    \n이건 예시에요! 내가 수집한 데이터양에 따라 적당한 에포크가 결정되요!! 
-    \n무조건 이 숫자가 좋은게 아니랍니다.
-    """)
+    # 결과 표시
+    if st.session_state.ml_submitted:
+        score = sum(
+            1 for i, q in enumerate(QUIZZES)
+            if st.session_state.ml_answers.get(i) == q['answer']
+        )
+        wrong_list = [
+            QUIZZES[i]['q'] for i in range(len(QUIZZES))
+            if st.session_state.ml_answers.get(i) != QUIZZES[i]['answer']
+        ]
+        total = len(QUIZZES)
+        wrong_count = total - score
 
-    # 1. 시뮬레이션 설정 (슬라이더)
-    epochs = st.slider("학습 횟수(Epochs)를 설정해 보세요", 1, 100, 50)
-    
-    col1, col2 = st.columns([1, 1])
+        st.divider()
+        st.markdown("## 📊 퀴즈 결과")
 
-    # 2. AI 상태 시각화 및 피드백
-    with col1:
-        st.subheader("🤖 AI의 마음 상태")
-        
-        if epochs < 20:
-            st.warning("🥱 상태: 졸음 (과소적합)")
-            st.write("공부량이 너무 적어요! 문제집을 한두 번 훑어만 봐서 아무것도 모르는 상태예요.")
-            progress_val = 20
-            brain_emoji = "💤"
-        elif epochs <= 75:
-            st.success("🤓 상태: 열공 (정상 학습)")
-            st.write("적당히 공부했어요! 원리를 이해하기 시작해서 새로운 문제가 나와도 잘 풀 수 있어요.")
-            progress_val = 85
-            brain_emoji = "💡"
+        col1, col2, col3 = st.columns(3)
+        col1.metric("✅ 맞힌 문제", f"{score}개")
+        col2.metric("❌ 틀린 문제", f"{wrong_count}개")
+        col3.metric("📊 점수", f"{int(score/total*100)}점")
+
+        if score == total:
+            st.balloons()
+            st.success("🎉 만점입니다! 완벽해요!")
+        elif score >= total * 0.8:
+            st.success(f"👍 잘했어요! {wrong_count}문제 틀렸어요.")
+        elif score >= total * 0.6:
+            st.warning(f"😅 조금 더 공부해봐요! {wrong_count}문제 틀렸어요.")
         else:
-            st.error("😵 상태: 멘붕 (과적합)")
-            st.write("공부를 너무 많이 해서 문제집의 정답을 통째로 외워버렸어요! 응용력이 하나도 없어요.")
-            progress_val = 95
-            brain_emoji = "😵‍💫"
+            st.error(f"😢 이론을 다시 공부해봐요! {wrong_count}문제 틀렸어요.")
 
-        st.progress(progress_val)
-        st.markdown(f"<div style='font-size: 80px; text-align: center;'>{brain_emoji}</div>", unsafe_allow_html=True)
+        # 결과 저장
+        if not st.session_state.ml_saved:
+            with st.spinner("결과 저장 중..."):
+                ok = save_quiz_result(username, "머신러닝기초", score, total, wrong_list)
+            if ok:
+                st.session_state.ml_saved = True
 
-    # 3. 실시간 성능 그래프 시뮬레이션
-    with col2:
-        st.subheader("📈 실력 변화 그래프")
-        
-        # 그래프 데이터 시뮬레이션 (학습 횟수에 따른 정확도 변화)
-        import pandas as pd
-        import numpy as np
+        # 다시 풀기 버튼
+        if st.button("🔄 다시 풀기", use_container_width=True):
+            st.session_state.ml_answers  = {}
+            st.session_state.ml_submitted = False
+            st.session_state.ml_saved    = False
+            for i in range(len(QUIZZES)):
+                if f"ml_quiz_{i}" in st.session_state:
+                    del st.session_state[f"ml_quiz_{i}"]
+            st.rerun()
 
-        x = np.arange(1, 101)
-        # 공부한 문제(Train)는 계속 점수가 오름
-        train_acc = 100 * (1 - np.exp(-x / 15))
-        # 새로운 문제(Val)는 중간에 정점을 찍고 과적합 때문에 떨어짐
-        val_acc = train_acc * (1 - (x - 45)**2 / 4000) 
-        
-        chart_data = pd.DataFrame({
-            '공부한 문제 (정확도)': train_acc[:epochs],
-            '새로운 실전 문제 (정확도)': val_acc[:epochs]
-        })
-        
-        st.line_chart(chart_data)
-        st.caption("하늘색선은 공부한 문제집 점수, 남색선은 실제 실력(실전 점수)이에요.")
-
-    st.divider()
-
-    # 4. 단계별 실습 가이드 (Teachable Machine)
-    st.header("📸 실제 AI 만들어보기")
-    st.write("구글의 'Teachable Machine'을 이용해 나만의 인공지능을 직접 훈련시켜 봐요.")
-    
-    step_col1, step_col2, step_col3 = st.columns(3)
-    
-    with step_col1:
-        with st.expander("1단계: 준비하기", expanded=True):
-            st.write("웹캠이 있는 컴퓨터에서 [Teachable Machine](https://teachablemachine.withgoogle.com/)에 접속하세요.")
-            st.write("'이미지 프로젝트'를 선택합니다.")
-            
-    with step_col2:
-        with st.expander("2단계: 데이터 모으기", expanded=True):
-            st.write("'가위', '바위', '보'처럼 분류하고 싶은 동작을 각각 촬영해서 입력하세요.")
-            st.write("이게 바로 지도학습의 데이터 수집이에요!")
-
-    with step_col3:
-        with st.expander("3단계: 학습 및 확인", expanded=True):
-            st.write("'학습(Train)' 버튼을 누르세요. 이때 오른쪽 상단의 설정을 눌러 에포크를 바꿔볼 수도 있어요!")
-            st.write("학습 후 카메라에 손을 대보고 AI가 잘 맞히는지 확인하세요.")
-
-    st.success("💡 **실습 팁:** 에포크를 1로 하면 AI가 나를 잘 못 알아보지만(과소적합), 너무 크게 하면 조금만 움직여도 엉뚱한 답을 할 수 있어요(과적합)!")
+# ════════ 탭3: 실습 ════════
+with tab3:
+    st.header("💻 머신러닝 실습")
+    st.info("✏️ 실습 내용을 추가하세요.")
+    st.markdown("""
+**실습 예시 아이디어:**
+- scikit-learn으로 간단한 분류기 만들기
+- 붓꽃(iris) 데이터셋 분류 실습
+- 모델 정확도 시각화
+    """)
