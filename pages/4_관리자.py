@@ -8,7 +8,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaInMemoryUpload
 from PIL import Image, ImageDraw
 from collections import defaultdict
-import io, json, random
+import io, json, random, base64, requests
 
 SYSTEM_FOLDER_ID = "1_zMtw7RDvOAZ3P7o2rNCKeO4DhKdZ3nv"
 TRAIN_IMG_ID     = "1vAmEqTkOfI7GELAOYBSknv0zhMX00RPv"
@@ -36,6 +36,58 @@ def get_drive_service():
     return build('drive', 'v3', credentials=creds)
 
 LABELS_FILE = "labels.json"
+
+
+GITHUB_TOKEN = None  # Streamlit Secrets에서 불러옴
+GITHUB_REPO  = None
+
+def get_github_info():
+    try:
+        token = st.secrets.get("github", {}).get("token", "")
+        repo  = st.secrets.get("github", {}).get("repo", "")
+        return token, repo
+    except:
+        return "", ""
+
+def update_github_yaml(labels_list):
+    """라벨 변경 시 GitHub의 data.yaml 자동 업데이트"""
+    try:
+        token, repo = get_github_info()
+        if not token or not repo:
+            return False, "GitHub 토큰/레포 설정 없음"
+
+        # data.yaml 내용 생성
+        nc = len(labels_list)
+        names_str = "[" + ", ".join(f"'{l}'" for l in labels_list) + "]"
+        yaml_content = f"""path: /content/drive/MyDrive/학교/AIClassWebapp
+train: train/images
+val: val/images
+
+nc: {nc}
+names: {names_str}
+"""
+        encoded = base64.b64encode(yaml_content.encode()).decode()
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        url = f"https://api.github.com/repos/{repo}/contents/data.yaml"
+
+        # 기존 파일 SHA 가져오기
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            sha = r.json()['sha']
+            payload = {"message": f"Update data.yaml: {labels_list}", "content": encoded, "sha": sha}
+        else:
+            payload = {"message": f"Create data.yaml: {labels_list}", "content": encoded}
+
+        r2 = requests.put(url, headers=headers, json=payload)
+        if r2.status_code in [200, 201]:
+            return True, "GitHub data.yaml 업데이트 완료!"
+        else:
+            return False, f"GitHub 오류: {r2.status_code}"
+    except Exception as e:
+        return False, f"GitHub 업데이트 실패: {e}"
 
 def load_labels():
     svc = get_drive_service()
@@ -252,7 +304,11 @@ with tab_labels:
             if st.button("🗑️ 삭제", key=f"del_label_{i}"):
                 current_labels.pop(i)
                 save_labels(current_labels)
-                st.success(f"'{label}' 삭제!")
+                ok, msg = update_github_yaml(current_labels)
+                if ok:
+                    st.success(f"'{label}' 삭제! ✅ {msg}")
+                else:
+                    st.warning(f"'{label}' 삭제완료 (GitHub: {msg})")
                 st.rerun()
 
     st.divider()
@@ -272,7 +328,11 @@ with tab_labels:
                 else:
                     current_labels.append(new_label)
                     save_labels(current_labels)
-                    st.success(f"✅ '{new_label}' 추가 완료!")
+                    ok, msg = update_github_yaml(current_labels)
+                    if ok:
+                        st.success(f"✅ '{new_label}' 추가! {msg}")
+                    else:
+                        st.warning(f"'{new_label}' 추가완료 (GitHub: {msg})")
                     st.rerun()
             else:
                 st.error("라벨 이름을 입력하세요.")
@@ -281,8 +341,20 @@ with tab_labels:
     # 전체 초기화
     if st.button("🗑️ 전체 초기화", type="secondary"):
         save_labels([])
-        st.success("전체 라벨 초기화 완료!")
+        ok, msg = update_github_yaml([])
+        st.success(f"전체 라벨 초기화 완료! GitHub: {msg}")
         st.rerun()
+
+    st.divider()
+    st.markdown("**🔄 GitHub data.yaml 수동 동기화:**")
+    st.caption("라벨 목록을 GitHub의 data.yaml에 강제로 반영합니다.")
+    if st.button("🔄 GitHub 동기화", type="primary"):
+        with st.spinner("GitHub 업데이트 중..."):
+            ok, msg = update_github_yaml(current_labels)
+        if ok:
+            st.success(f"✅ {msg}")
+        else:
+            st.error(f"❌ {msg}")
 
 
 # ════════ 탭1: 회원 관리 ════════
