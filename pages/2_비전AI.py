@@ -278,7 +278,7 @@ def draw_label_overlay(img_pil, click_coords, temp_boxes):
 
 # ── 세션 초기화 ──
 for key, val in {
-    "vision_labels": ["apple"],
+    "vision_labels": ["vicpie"],
     "loaded_image_id": None,
     "loaded_image_pil": None,
     "click_coords": [],
