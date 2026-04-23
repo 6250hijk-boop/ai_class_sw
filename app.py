@@ -1,60 +1,50 @@
 import streamlit as st
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaInMemoryUpload
-import json
 import hashlib
 import time
 import re
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import sys, os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from utils.firebase import get_db
 
-SYSTEM_FOLDER_ID = "1_zMtw7RDvOAZ3P7o2rNCKeO4DhKdZ3nv"
-USERS_FILE       = "users.json"
-
+# ── 비밀번호 암호화 ──
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def get_drive_service():
-    """매번 새로운 서비스 객체 생성 (SSL 오류 방지)"""
-    info = st.secrets["google_oauth"]
-    creds = Credentials(
-        token=None,
-        refresh_token=info["refresh_token"],
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=info["client_id"],
-        client_secret=info["client_secret"],
-        scopes=['https://www.googleapis.com/auth/drive']
-    )
-    if not creds.valid:
-        creds.refresh(Request())
-    return build('drive', 'v3', credentials=creds)
+# ── Firebase 회원 함수 ──
+def load_user(username):
+    db = get_db()
+    doc = db.collection("users").document(username).get()
+    return doc.to_dict() if doc.exists else None
 
-def load_users():
-    svc = get_drive_service()
-    query = f"name='{USERS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
-    files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
-    if not files:
-        return {}
-    data = svc.files().get_media(fileId=files[0]['id']).execute()
-    return json.loads(data.decode('utf-8'))
+def save_user(username, data):
+    db = get_db()
+    db.collection("users").document(username).set(data)
 
-def save_users(users_dict):
-    svc = get_drive_service()
-    content = json.dumps(users_dict, ensure_ascii=False, indent=2).encode('utf-8')
-    media = MediaInMemoryUpload(content, mimetype='application/json')
-    query = f"name='{USERS_FILE}' and '{SYSTEM_FOLDER_ID}' in parents and trashed=false"
-    files = svc.files().list(q=query, fields="files(id)").execute().get('files', [])
-    if files:
-        svc.files().update(fileId=files[0]['id'], media_body=media).execute()
-    else:
-        svc.files().create(
-            body={'name': USERS_FILE, 'parents': [SYSTEM_FOLDER_ID]},
-            media_body=media
-        ).execute()
+def email_exists(email):
+    db = get_db()
+    docs = db.collection("users").where("email", "==", email).get()
+    return len(docs) > 0
 
+def stunum_exists(stunum):
+    db = get_db()
+    docs = db.collection("users").where("student_num", "==", stunum).get()
+    return len(docs) > 0
+
+def get_user_by_email(email):
+    db = get_db()
+    docs = db.collection("users").where("email", "==", email).get()
+    if docs:
+        return docs[0].id, docs[0].to_dict()
+    return None, None
+
+def update_user_password(username, hashed_pw):
+    db = get_db()
+    db.collection("users").document(username).update({"password": hashed_pw})
+
+# ── 관리자 확인 ──
 def is_admin_credentials(username, password):
     try:
         admin_id = st.secrets.get("admin", {}).get("username", "admin")
@@ -63,6 +53,7 @@ def is_admin_credentials(username, password):
     except:
         return False
 
+# ── 이메일 발송 ──
 def send_email(to_email, subject, body):
     try:
         sender_email    = st.secrets["email"]["sender"]
@@ -97,7 +88,6 @@ def send_account_info(to_email, username):
         <p style="margin:0;font-size:16px;">📧 이메일: <b>{to_email}</b></p>
         <p style="margin:0;font-size:16px;">👤 아이디: <b>{username}</b></p>
     </div>
-    <p>비밀번호는 보안상 확인이 불가능합니다.<br/>비밀번호를 잊으셨다면 <b>비밀번호 재설정</b>을 이용해주세요.</p>
     """
     return send_email(to_email, "[AI 학습 플랫폼] 아이디 안내", body)
 
@@ -135,6 +125,7 @@ if not st.session_state.logged_in:
     with col2:
         tab_login, tab_signup, tab_find = st.tabs(["🔑 로그인", "📝 회원가입", "🔍 아이디/비밀번호 찾기"])
 
+        # ── 로그인 ──
         with tab_login:
             login_id = st.text_input("아이디", key="login_id")
             login_pw = st.text_input("비밀번호", type="password", key="login_pw")
@@ -147,8 +138,8 @@ if not st.session_state.logged_in:
                     st.session_state.is_admin  = True
                     st.rerun()
                 else:
-                    users = load_users()
-                    if login_id in users and users[login_id]['password'] == hash_password(login_pw):
+                    user = load_user(login_id)
+                    if user and user.get("password") == hash_password(login_pw):
                         st.session_state.logged_in = True
                         st.session_state.username  = login_id
                         st.session_state.is_admin  = False
@@ -156,13 +147,14 @@ if not st.session_state.logged_in:
                     else:
                         st.error("❌ 아이디 또는 비밀번호가 틀렸습니다.")
 
+        # ── 회원가입 ──
         with tab_signup:
-            new_id      = st.text_input("아이디 (영문/숫자 4~20자)", key="signup_id")
-            new_stunum  = st.text_input("학번 (숫자)", key="signup_stunum", placeholder="예: 10101")
-            new_name    = st.text_input("이름", key="signup_name", placeholder="예: 홍길동")
-            new_email   = st.text_input("이메일 주소", key="signup_email", placeholder="example@gmail.com")
-            new_pw      = st.text_input("비밀번호 (6자 이상)", type="password", key="signup_pw")
-            new_pw2     = st.text_input("비밀번호 확인", type="password", key="signup_pw2")
+            new_id     = st.text_input("아이디 (영문/숫자 4~20자)", key="signup_id")
+            new_stunum = st.text_input("학번 (숫자)", key="signup_stunum", placeholder="예: 10101")
+            new_name   = st.text_input("이름", key="signup_name", placeholder="예: 홍길동")
+            new_email  = st.text_input("이메일 주소", key="signup_email", placeholder="example@gmail.com")
+            new_pw     = st.text_input("비밀번호 (6자 이상)", type="password", key="signup_pw")
+            new_pw2    = st.text_input("비밀번호 확인", type="password", key="signup_pw2")
 
             if st.button("회원가입", type="primary", use_container_width=True):
                 if not all([new_id, new_stunum, new_name, new_email, new_pw, new_pw2]):
@@ -177,58 +169,51 @@ if not st.session_state.logged_in:
                     st.error("비밀번호는 6자 이상이어야 합니다.")
                 elif new_pw != new_pw2:
                     st.error("비밀번호가 일치하지 않습니다.")
+                elif load_user(new_id):
+                    st.error("❌ 이미 존재하는 아이디입니다.")
+                elif email_exists(new_email):
+                    st.error("❌ 이미 사용 중인 이메일입니다.")
+                elif stunum_exists(new_stunum):
+                    st.error("❌ 이미 등록된 학번입니다.")
                 else:
-                    users = load_users()
-                    if new_id in users:
-                        st.error("❌ 이미 존재하는 아이디입니다.")
-                    elif any(u.get('email') == new_email for u in users.values()):
-                        st.error("❌ 이미 사용 중인 이메일입니다.")
-                    elif any(u.get('student_num') == new_stunum for u in users.values()):
-                        st.error("❌ 이미 등록된 학번입니다.")
-                    else:
-                        users[new_id] = {
-                            'password':    hash_password(new_pw),
-                            'email':       new_email,
-                            'student_num': new_stunum,
-                            'name':        new_name,
-                            'created_at':  time.strftime('%Y-%m-%d %H:%M:%S')
-                        }
-                        save_users(users)
-                        st.success(f"✅ '{new_id}' 가입 완료! 로그인하세요.")
+                    save_user(new_id, {
+                        "password":    hash_password(new_pw),
+                        "email":       new_email,
+                        "student_num": new_stunum,
+                        "name":        new_name,
+                        "created_at":  time.strftime('%Y-%m-%d %H:%M:%S')
+                    })
+                    st.success(f"✅ '{new_id}' 가입 완료! 로그인하세요.")
 
+        # ── 아이디/비밀번호 찾기 ──
         with tab_find:
             find_tab1, find_tab2 = st.tabs(["👤 아이디 찾기", "🔑 비밀번호 찾기"])
             with find_tab1:
-                st.markdown("가입 시 등록한 이메일을 입력하면 아이디를 보내드려요.")
                 find_id_email = st.text_input("이메일 주소", key="find_id_email")
                 if st.button("아이디 찾기", type="primary", use_container_width=True, key="btn_find_id"):
                     if not find_id_email:
                         st.error("이메일을 입력하세요.")
                     else:
-                        users = load_users()
-                        matched = [uid for uid, info in users.items() if info.get('email') == find_id_email]
-                        if matched:
+                        uid, _ = get_user_by_email(find_id_email)
+                        if uid:
                             with st.spinner("이메일 발송 중..."):
-                                ok = send_account_info(find_id_email, matched[0])
+                                ok = send_account_info(find_id_email, uid)
                             if ok:
                                 st.success("✅ 아이디를 이메일로 발송했습니다!")
                         else:
                             st.error("❌ 해당 이메일로 가입된 계정이 없습니다.")
             with find_tab2:
-                st.markdown("가입 시 등록한 이메일을 입력하면 임시 비밀번호를 보내드려요.")
                 find_pw_email = st.text_input("이메일 주소", key="find_pw_email")
                 if st.button("임시 비밀번호 발급", type="primary", use_container_width=True, key="btn_find_pw"):
                     if not find_pw_email:
                         st.error("이메일을 입력하세요.")
                     else:
-                        users = load_users()
-                        matched = [uid for uid, info in users.items() if info.get('email') == find_pw_email]
-                        if matched:
+                        uid, _ = get_user_by_email(find_pw_email)
+                        if uid:
                             temp_pw = generate_temp_password()
-                            users[matched[0]]['password'] = hash_password(temp_pw)
-                            save_users(users)
+                            update_user_password(uid, hash_password(temp_pw))
                             with st.spinner("이메일 발송 중..."):
-                                ok = send_temp_password(find_pw_email, matched[0], temp_pw)
+                                ok = send_temp_password(find_pw_email, uid, temp_pw)
                             if ok:
                                 st.success("✅ 임시 비밀번호를 이메일로 발송했습니다!")
                         else:
